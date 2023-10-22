@@ -117,6 +117,25 @@ fn sample_view_target(uv: vec2<f32>) -> vec3<f32> {
     return RGB_to_YCoCg(sample);
 }
 
+// Dilate edges by picking the closest motion vector from 3x3 neighborhood
+// https://advances.realtimerendering.com/s2014/index.html#_HIGH-QUALITY_TEMPORAL_SUPERSAMPLING, slide 27
+// https://www.elopezr.com/temporal-aa-and-the-quest-for-the-holy-trail/, Depth Dilation
+fn get_closest_motion_vector(uv: vec2<f32>, texture_size: vec2<f32>) -> vec2<f32> {
+    var closest_depth = 0.0;
+    var closest_offset = vec2(0.0);
+    for(var y = -1; y <= 1; y += 1) {
+        for(var x = -1; x <= 1; x += 1) {
+            let uv_offset = vec2<f32>(vec2<i32>(x, y)) / texture_size;
+            let depth = textureSampleLevel(depth, nearest_sampler, uv + uv_offset, 0.0);
+            if (depth > closest_depth) {
+                closest_depth = depth;
+                closest_offset = uv_offset;
+            }
+        }
+    }
+    return textureSampleLevel(motion_vectors, nearest_sampler, uv + closest_offset, 0.0).rg;
+}
+
 @fragment
 fn taa(@location(0) uv: vec2<f32>) -> Output {
     let texture_size = vec2<f32>(textureDimensions(view_target));
@@ -130,35 +149,7 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
 #endif
 
 #ifndef RESET
-    // Pick the closest motion_vector from 5 samples (reduces aliasing on the edges of moving entities)
-    // https://advances.realtimerendering.com/s2014/index.html#_HIGH-QUALITY_TEMPORAL_SUPERSAMPLING, slide 27
-    let offset = texel_size * 2.0;
-    let d_uv_tl = uv + vec2(-offset.x, offset.y);
-    let d_uv_tr = uv + vec2(offset.x, offset.y);
-    let d_uv_bl = uv + vec2(-offset.x, -offset.y);
-    let d_uv_br = uv + vec2(offset.x, -offset.y);
-    var closest_uv = uv;
-    let d_tl = textureSampleLevel(depth, nearest_sampler, d_uv_tl, 0.0);
-    let d_tr = textureSampleLevel(depth, nearest_sampler, d_uv_tr, 0.0);
-    var closest_depth = textureSampleLevel(depth, nearest_sampler, uv, 0.0);
-    let d_bl = textureSampleLevel(depth, nearest_sampler, d_uv_bl, 0.0);
-    let d_br = textureSampleLevel(depth, nearest_sampler, d_uv_br, 0.0);
-    if d_tl > closest_depth {
-        closest_uv = d_uv_tl;
-        closest_depth = d_tl;
-    }
-    if d_tr > closest_depth {
-        closest_uv = d_uv_tr;
-        closest_depth = d_tr;
-    }
-    if d_bl > closest_depth {
-        closest_uv = d_uv_bl;
-        closest_depth = d_bl;
-    }
-    if d_br > closest_depth {
-        closest_uv = d_uv_br;
-    }
-    let closest_motion_vector = textureSampleLevel(motion_vectors, nearest_sampler, closest_uv, 0.0).rg;
+    let closest_motion_vector = get_closest_motion_vector(uv, texture_size);
 
     // How confident we are that the history is representative of the current frame
     var history_confidence = textureSampleLevel(history, nearest_sampler, uv, 1.0).a;

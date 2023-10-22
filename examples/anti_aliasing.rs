@@ -59,6 +59,7 @@ fn main() {
                 update_ui,
                 update_uv_scale,
                 rotate_camera,
+                set_sampler,
             ),
         )
         .run();
@@ -425,6 +426,12 @@ fn setup_scene(
         ..default()
     });
 
+    //commands.spawn(SceneBundle {
+    //    scene: asset_server.load("brick_wall/brick_wall.glb#Scene0"),
+    //    transform: Transform::from_xyz(0.0, 1.0, -1.5),
+    //    ..default()
+    //});
+
     let cube_h = meshes.add(Mesh::from(shape::Cube { size: 0.25 }));
 
     // Cubes
@@ -455,16 +462,17 @@ fn setup_scene(
     commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
             shadows_enabled: true,
+            illuminance: 80000.0,
             ..default()
         },
         transform: Transform::from_rotation(Quat::from_euler(
             EulerRot::ZYX,
             0.0,
-            PI * -0.15,
+            PI * -0.47,
             PI * -0.15,
         )),
         cascade_shadow_config: CascadeShadowConfigBuilder {
-            maximum_distance: 3.0,
+            maximum_distance: 5.0,
             first_cascade_far_bound: 0.9,
             ..default()
         }
@@ -644,4 +652,38 @@ fn noise_debug_texture() -> Image {
         ..default()
     });
     img
+}
+
+// Bevy main doesn't currently load the address mode from the gltf.
+fn set_sampler(
+    mut image_events: EventReader<AssetEvent<Image>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    for event in image_events.read() {
+        match event {
+            AssetEvent::Added { id } => {
+                let Some(img) = images.get_mut(*id) else {
+                    continue;
+                };
+                match &mut img.sampler_descriptor {
+                    ImageSampler::Default => {
+                        img.sampler_descriptor = ImageSampler::Descriptor(SamplerDescriptor {
+                            address_mode_u: AddressMode::Repeat,
+                            address_mode_v: AddressMode::Repeat,
+                            address_mode_w: AddressMode::Repeat,
+                            mag_filter: FilterMode::Linear,
+                            min_filter: FilterMode::Linear,
+                            mipmap_filter: FilterMode::Linear,
+                            anisotropy_clamp: 16,
+                            ..default()
+                        });
+                    }
+                    ImageSampler::Descriptor(_) => continue,
+                }
+            }
+            _ => continue,
+        };
+        for _mat in materials.iter_mut() {}
+    }
 }
