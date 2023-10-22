@@ -208,35 +208,35 @@ impl ViewNode for TAANode {
                         },
                         BindGroupEntry {
                             binding: 1,
+                            resource: BindingResource::Sampler(&pipelines.linear_samplers[0]),
+                        },
+                        BindGroupEntry {
+                            binding: 2,
                             resource: BindingResource::TextureView(
                                 &taa_history_textures.read.default_view,
                             ),
                         },
                         BindGroupEntry {
-                            binding: 2,
+                            binding: 3,
+                            resource: BindingResource::Sampler(&pipelines.linear_samplers[1]),
+                        },
+                        BindGroupEntry {
+                            binding: 4,
                             resource: BindingResource::TextureView(
                                 &taa_history_textures.motion_read.default_view,
                             ),
                         },
                         BindGroupEntry {
-                            binding: 3,
+                            binding: 5,
                             resource: BindingResource::TextureView(
                                 &prepass_motion_vectors_texture.default_view,
                             ),
                         },
                         BindGroupEntry {
-                            binding: 4,
+                            binding: 6,
                             resource: BindingResource::TextureView(
                                 &prepass_depth_texture.default_view,
                             ),
-                        },
-                        BindGroupEntry {
-                            binding: 5,
-                            resource: BindingResource::Sampler(&pipelines.nearest_sampler),
-                        },
-                        BindGroupEntry {
-                            binding: 6,
-                            resource: BindingResource::Sampler(&pipelines.linear_sampler),
                         },
                     ],
                 });
@@ -278,26 +278,24 @@ impl ViewNode for TAANode {
 #[derive(Resource)]
 struct TAAPipeline {
     taa_bind_group_layout: BindGroupLayout,
-    nearest_sampler: Sampler,
-    linear_sampler: Sampler,
+    linear_samplers: [Sampler; 2],
 }
 
 impl FromWorld for TAAPipeline {
     fn from_world(world: &mut World) -> Self {
         let render_device = world.resource::<RenderDevice>();
 
-        let nearest_sampler = render_device.create_sampler(&SamplerDescriptor {
-            label: Some("taa_nearest_sampler"),
-            mag_filter: FilterMode::Nearest,
-            min_filter: FilterMode::Nearest,
-            ..SamplerDescriptor::default()
-        });
-        let linear_sampler = render_device.create_sampler(&SamplerDescriptor {
+        let linear_discriptor = SamplerDescriptor {
             label: Some("taa_linear_sampler"),
             mag_filter: FilterMode::Linear,
             min_filter: FilterMode::Linear,
             ..SamplerDescriptor::default()
-        });
+        };
+
+        let linear_samplers = [
+            render_device.create_sampler(&linear_discriptor),
+            render_device.create_sampler(&linear_discriptor),
+        ];
 
         let taa_bind_group_layout =
             render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -314,18 +312,14 @@ impl FromWorld for TAAPipeline {
                         },
                         count: None,
                     },
-                    // TAA History (read)
+                    // View target Linear sampler
                     BindGroupLayoutEntry {
                         binding: 1,
                         visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: true },
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
+                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
                         count: None,
                     },
-                    // TAA Motion History (read)
+                    // TAA History (read)
                     BindGroupLayoutEntry {
                         binding: 2,
                         visibility: ShaderStages::FRAGMENT,
@@ -336,9 +330,27 @@ impl FromWorld for TAAPipeline {
                         },
                         count: None,
                     },
-                    // Motion Vectors
+                    // TAA History Linear sampler
                     BindGroupLayoutEntry {
                         binding: 3,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // TAA Motion History (read)
+                    BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: true },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // Motion Vectors
+                    BindGroupLayoutEntry {
+                        binding: 5,
                         visibility: ShaderStages::FRAGMENT,
                         ty: BindingType::Texture {
                             sample_type: TextureSampleType::Float { filterable: true },
@@ -349,7 +361,7 @@ impl FromWorld for TAAPipeline {
                     },
                     // Depth
                     BindGroupLayoutEntry {
-                        binding: 4,
+                        binding: 6,
                         visibility: ShaderStages::FRAGMENT,
                         ty: BindingType::Texture {
                             sample_type: TextureSampleType::Depth,
@@ -358,27 +370,12 @@ impl FromWorld for TAAPipeline {
                         },
                         count: None,
                     },
-                    // Nearest sampler
-                    BindGroupLayoutEntry {
-                        binding: 5,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Sampler(SamplerBindingType::NonFiltering),
-                        count: None,
-                    },
-                    // Linear sampler
-                    BindGroupLayoutEntry {
-                        binding: 6,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                        count: None,
-                    },
                 ],
             });
 
         TAAPipeline {
             taa_bind_group_layout,
-            nearest_sampler,
-            linear_sampler,
+            linear_samplers,
         }
     }
 }
@@ -405,6 +402,11 @@ impl SpecializedRenderPipeline for TAAPipeline {
         if key.reset {
             shader_defs.push("RESET".into());
         }
+
+        // TODO webgl is not a bevy_mod_taa feature.
+        // #[cfg(all(feature = "webgl", target_arch = "wasm32"))]
+        #[cfg(target_arch = "wasm32")]
+        shader_defs.push("WEBGL2".into());
 
         RenderPipelineDescriptor {
             label: Some("taa_pipeline".into()),
