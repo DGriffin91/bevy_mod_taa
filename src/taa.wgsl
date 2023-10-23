@@ -4,6 +4,7 @@
 // http://leiy.cc/publications/TAA/TAA_EG2020_Talk.pdf
 // https://advances.realtimerendering.com/s2014/index.html#_HIGH-QUALITY_TEMPORAL_SUPERSAMPLING
 
+#import bevy_pbr::mesh_view_bindings view, globals
 #import bevy_pbr::utils PI
 const PI_SQ: f32 = 9.8696044010893586188344910;
 
@@ -18,20 +19,28 @@ struct TAAUniform {
 
 #import bevy_core_pipeline::fullscreen_vertex_shader  FullscreenVertexOutput
 
-@group(0) @binding(0) var view_target: texture_2d<f32>;
-@group(0) @binding(1) var view_linear_sampler: sampler;
-@group(0) @binding(2) var history: texture_2d<f32>;
-@group(0) @binding(3) var history_linear_sampler: sampler;
-@group(0) @binding(4) var motion_history: texture_2d<f32>;
-@group(0) @binding(5) var motion_vectors: texture_2d<f32>;
-@group(0) @binding(6) var depth: texture_depth_2d;
-@group(0) @binding(7) var<uniform> prams: TAAUniform;
+@group(0) @binding(20) var view_target: texture_2d<f32>;
+@group(0) @binding(21) var view_linear_sampler: sampler;
+@group(0) @binding(22) var history: texture_2d<f32>;
+@group(0) @binding(23) var history_linear_sampler: sampler;
+@group(0) @binding(24) var motion_history: texture_2d<f32>;
+@group(0) @binding(25) var motion_vectors: texture_2d<f32>;
+@group(0) @binding(26) var depth: texture_depth_2d;
+@group(0) @binding(27) var<uniform> prams: TAAUniform;
 
 struct Output {
     @location(0) view_target: vec4<f32>,
     @location(1) history: vec4<f32>,
     @location(2) motion_history: vec4<f32>,
 };
+
+// https://github.com/NVIDIAGameWorks/RayTracingDenoiser/blob/3c881ae3075f7ca754e22177877335b82e16da5a/Shaders/Include/Common.hlsli#L124
+fn world_space_pixel_radius(linear_depth: f32) -> f32 {
+    // https://github.com/NVIDIAGameWorks/RayTracingDenoiser/blob/3c881ae3075f7ca754e22177877335b82e16da5a/Source/Sigma.cpp#L107
+    let is_orthographic = view.projection[3].w == 1.0;
+    let unproject = 1.0 / (0.5 * view.viewport.w * view.projection[1][1]);
+    return unproject * select(linear_depth, 1.0, is_orthographic);
+}
 
 fn cubic_b(v: f32) -> vec4<f32> {
     let n = vec4(1.0, 2.0, 3.0, 4.0) - v;
@@ -174,7 +183,7 @@ fn sample_view_target(uv: vec2<f32>, texture_size: vec2<f32>) -> vec3<f32> {
 // Dilate edges by picking the closest motion vector from 3x3 neighborhood
 // https://advances.realtimerendering.com/s2014/index.html#_HIGH-QUALITY_TEMPORAL_SUPERSAMPLING, slide 27
 // https://www.elopezr.com/temporal-aa-and-the-quest-for-the-holy-trail/, Depth Dilation
-fn get_closest_motion_vector(uv: vec2<f32>, texture_size: vec2<f32>) -> vec2<f32> {
+fn get_closest_motion_vector_depth(uv: vec2<f32>, texture_size: vec2<f32>) -> vec3<f32> {
     var closest_depth = 0.0;
     var closest_offset = vec2(0.0);
 #ifndef WEBGL2
@@ -189,7 +198,7 @@ fn get_closest_motion_vector(uv: vec2<f32>, texture_size: vec2<f32>) -> vec2<f32
         }
     }
 #endif //WEBGL2
-    return textureLoad(motion_vectors, vec2<i32>((uv + closest_offset) * texture_size), 0).rg;
+    return vec3(textureLoad(motion_vectors, vec2<i32>((uv + closest_offset) * texture_size), 0).rg, closest_depth);
 }
 
 @fragment
@@ -208,9 +217,12 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     original_color = vec4(tonemap(original_color.rgb), original_color.a);
 #endif
 
-#ifndef RESET
-    let closest_motion_vector = get_closest_motion_vector(uv, texture_size);
+    let closest_motion_vector_depth = get_closest_motion_vector_depth(uv, texture_size);
 
+    let closest_motion_vector = closest_motion_vector_depth.xy;
+    let closest_depth = closest_motion_vector_depth.z;
+
+#ifndef RESET
     // How confident we are that the history is representative of the current frame
     var history_confidence = textureLoad(history, ifrag_coord, 0).a;
     var history_color = vec3(0.0);
@@ -322,6 +334,6 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
 #endif // TONEMAP
 
     out.view_target = vec4(current_color, original_color.a);
-    out.motion_history = textureLoad(motion_vectors, vec2<i32>(uv * texture_size), 0);
+    out.motion_history = vec4(textureLoad(motion_vectors, vec2<i32>(uv * texture_size), 0).xy, closest_depth, 0.0);
     return out;
 }
