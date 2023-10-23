@@ -31,7 +31,7 @@ use bevy::{
     window::{PrimaryWindow, WindowResized},
 };
 
-use bevy_mod_taa::{TAABundle, TAAPlugin, TAASettings};
+use bevy_mod_taa::{TAABundle, TAAPlugin, TAASequence, TAASettings};
 
 use image::imageops::FilterType;
 
@@ -92,12 +92,12 @@ struct CameraMovementSettings {
 
 fn modify_aa(
     keys: Res<Input<KeyCode>>,
-    mut camera: Query<(Entity, Option<&mut Fxaa>, Option<&TAASettings>), With<Camera>>,
+    mut camera: Query<(Entity, Option<&mut Fxaa>, Option<&mut TAASettings>), With<Camera>>,
     mut msaa: ResMut<Msaa>,
     mut commands: Commands,
     mut camera_movement_settings: ResMut<CameraMovementSettings>,
 ) {
-    let (camera_entity, fxaa, taa) = camera.single_mut();
+    let (camera_entity, fxaa, mut taa) = camera.single_mut();
     let mut camera = commands.entity(camera_entity);
 
     // No AA
@@ -160,15 +160,31 @@ fn modify_aa(
         }
     }
 
+    if let Some(ref mut _taa) = taa {
+        if keys.just_pressed(KeyCode::Q) {
+            camera.insert(TAABundle::sample2());
+            //taa.sequence = TAASequence::Sample2;
+        }
+        if keys.just_pressed(KeyCode::W) {
+            camera.insert(TAABundle::sample3());
+            //taa.sequence = TAASequence::Sample3;
+        }
+        if keys.just_pressed(KeyCode::E) {
+            camera.insert(TAABundle::sample4());
+            //taa.sequence = TAASequence::Sample4;
+        }
+        if keys.just_pressed(KeyCode::R) {
+            camera.insert(TAABundle::sample8());
+            //taa.sequence = TAASequence::Sample8;
+        }
+    }
+
     // TAA
     if keys.just_pressed(KeyCode::Key4) && taa.is_none() {
         *msaa = Msaa::Off;
         camera.remove::<Fxaa>();
 
-        camera.insert((
-            //FxaaPrepass::default()
-            TAABundle::sample8(),
-        ));
+        camera.insert(TAABundle::sample3());
     }
 
     // Rotate Camera
@@ -301,6 +317,31 @@ fn update_ui(
             ui.push_str("(T) *Extreme*");
         } else {
             ui.push_str("(T) Extreme");
+        }
+    }
+
+    if let Some(taa) = taa {
+        ui.push_str("\n\n----------\n\nSample Count\n");
+
+        if taa.sequence == TAASequence::Sample2 {
+            ui.push_str("(Q) *2*\n");
+        } else {
+            ui.push_str("(Q) 2\n");
+        }
+        if taa.sequence == TAASequence::Sample3 {
+            ui.push_str("(W) *3*\n");
+        } else {
+            ui.push_str("(W) 3\n");
+        }
+        if taa.sequence == TAASequence::Sample4 {
+            ui.push_str("(E) *4*\n");
+        } else {
+            ui.push_str("(E) 4\n");
+        }
+        if taa.sequence == TAASequence::Sample8 {
+            ui.push_str("(R) *8*\n");
+        } else {
+            ui.push_str("(R) 8\n");
         }
     }
 
@@ -495,7 +536,7 @@ fn setup_scene(
     if screenshot_taa.is_some() {
         camera.insert((
             //FxaaPrepass::default()
-            TAABundle::sample8(),
+            TAABundle::sample3(),
         ));
     }
 

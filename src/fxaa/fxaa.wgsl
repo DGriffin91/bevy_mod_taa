@@ -12,6 +12,10 @@
 @group(0) @binding(1) var samp: sampler;
 
 // Trims the algorithm from processing darks.
+#ifdef EDGE_THRESH_MIN_ULTRA_LOW
+    const EDGE_THRESHOLD_MIN: f32 = 0.16;
+#endif
+
 #ifdef EDGE_THRESH_MIN_LOW
     const EDGE_THRESHOLD_MIN: f32 = 0.0833;
 #endif
@@ -33,6 +37,10 @@
 #endif
 
 // The minimum amount of local contrast required to apply algorithm.
+#ifdef EDGE_THRESH_MIN_ULTRA_LOW
+    const EDGE_THRESHOLD_MAX: f32 = 0.35;
+#endif
+
 #ifdef EDGE_THRESH_LOW
     const EDGE_THRESHOLD_MAX: f32 = 0.250;
 #endif

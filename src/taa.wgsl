@@ -22,10 +22,12 @@ struct TAAParameters {
 @group(0) @binding(1) var view_linear_sampler: sampler;
 @group(0) @binding(2) var history: texture_2d<f32>;
 @group(0) @binding(3) var history_linear_sampler: sampler;
-@group(0) @binding(4) var motion_history: texture_2d<f32>;
-@group(0) @binding(5) var motion_vectors: texture_2d<f32>;
-@group(0) @binding(6) var depth: texture_depth_2d;
-@group(0) @binding(7) var<uniform> prams: TAAParameters;
+@group(0) @binding(4) var history2: texture_2d<f32>;
+@group(0) @binding(5) var history2_linear_sampler: sampler;
+@group(0) @binding(6) var motion_history: texture_2d<f32>;
+@group(0) @binding(7) var motion_vectors: texture_2d<f32>;
+@group(0) @binding(8) var depth: texture_depth_2d;
+@group(0) @binding(9) var<uniform> prams: TAAParameters;
 
 struct Output {
     @location(0) view_target: vec4<f32>,
@@ -198,10 +200,11 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     let texel_size = 1.0 / texture_size;
 
     // Fetch the current sample
-    let original_color = textureLoad(view_target, vec2<i32>(uv * texture_size), 0);
+    var original_color = textureLoad(view_target, vec2<i32>(uv * texture_size), 0);
     var current_color = original_color.rgb;
 #ifdef TONEMAP
     current_color = tonemap(current_color);
+    original_color = vec4(tonemap(original_color.rgb), original_color.a);
 #endif
 
 #ifndef RESET
@@ -210,11 +213,16 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     // How confident we are that the history is representative of the current frame
     var history_confidence = textureLoad(history, vec2<i32>(uv * texture_size), 0).a;
     var history_color = vec3(0.0);
+#ifdef SAMPLE3
+    var history2_color = vec3(0.0);
+#endif
 
     // Reproject to find the equivalent sample from the past
     let history_uv = uv - closest_motion_vector;
-
+    let previous_motion_vector = textureLoad(motion_history, vec2<i32>(history_uv * texture_size), 0).rg;
+    let history2_uv = uv - closest_motion_vector - previous_motion_vector;
     var center_color_bicubic = texture_sample_bicubic_b(view_target, view_linear_sampler, uv, texture_size).rgb;
+
 #ifdef TONEMAP
         center_color_bicubic = tonemap(center_color_bicubic);
 #endif
@@ -229,7 +237,9 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
         reprojection_fail = true;
     } else {
         history_color = texture_sample_bicubic_catmull_rom(history, history_linear_sampler, history_uv, texture_size).rgb;
-        //history_color = lanczos(history, history_uv, texture_size, 6).rgb;
+#ifdef SAMPLE3
+        history2_color = texture_sample_bicubic_catmull_rom(history2, history2_linear_sampler, history2_uv, texture_size).rgb;
+#endif
 
         // Constrain past sample with 3x3 YCoCg variance clipping (reduces ghosting)
         // YCoCg: https://advances.realtimerendering.com/s2014/index.html#_HIGH-QUALITY_TEMPORAL_SUPERSAMPLING, slide 33
@@ -251,6 +261,11 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
         history_color = RGB_to_YCoCg(history_color);
         history_color = clip_towards_aabb_center(history_color, s_mm, mean - std_deviation, mean + std_deviation);
         history_color = YCoCg_to_RGB(history_color);
+#ifdef SAMPLE3
+        history2_color = RGB_to_YCoCg(history2_color);
+        history2_color = clip_towards_aabb_center(history2_color, s_mm, mean - std_deviation, mean + std_deviation);
+        history2_color = YCoCg_to_RGB(history2_color);
+#endif
 
         let pixel_motion_vector = abs(closest_motion_vector) * texture_size;
         if pixel_motion_vector.x < 0.01 && pixel_motion_vector.y < 0.01 {
@@ -267,10 +282,13 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     // https://hhoppe.com/supersample.pdf, section 4.1
     var current_color_factor = clamp(1.0 / history_confidence, prams.min_history_blend_rate, prams.default_history_blend_rate);
     current_color_factor = select(current_color_factor, 1.0, reprojection_fail);
+#ifdef SAMPLE3
+    current_color = select((current_color + history_color + history2_color) / 3.0, current_color, reprojection_fail);
+#else
     current_color = mix(history_color, current_color, current_color_factor);
+#endif
 
     // See Velocity Rejection: https://www.elopezr.com/temporal-aa-and-the-quest-for-the-holy-trail/
-    let previous_motion_vector = textureLoad(motion_history, vec2<i32>(history_uv * texture_size), 0).rg;
     let motion_distance = distance(previous_motion_vector, closest_motion_vector);
     let motion_disocclusion = saturate((motion_distance - 0.001) * 120.0); //The 120.0 was just hand tuned, needs further testing.
     current_color = mix(current_color, center_color_bicubic, motion_disocclusion);
@@ -284,11 +302,11 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     let history_confidence = 1.0 / prams.min_history_blend_rate;
 #endif // RESET
 
-#ifdef SAMPLE2
+#ifdef SAMPLE2_OR_SAMPLE3
     out.history = vec4(original_color.rgb, history_confidence);
 #else
     out.history = vec4(current_color, history_confidence);
-#endif // SAMPLE2
+#endif // SAMPLE2_OR_SAMPLE3
 
 #ifdef TONEMAP
     current_color = reverse_tonemap(current_color);

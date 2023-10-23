@@ -24,6 +24,7 @@ pub use node::FxaaNode;
 #[derive(Reflect, Eq, PartialEq, Hash, Clone, Copy)]
 #[reflect(PartialEq, Hash)]
 pub enum Sensitivity {
+    UltraLow,
     Low,
     Medium,
     High,
@@ -34,6 +35,7 @@ pub enum Sensitivity {
 impl Sensitivity {
     pub fn get_str(&self) -> &str {
         match self {
+            Sensitivity::UltraLow => "ULTRA_LOW",
             Sensitivity::Low => "LOW",
             Sensitivity::Medium => "MEDIUM",
             Sensitivity::High => "HIGH",
@@ -65,9 +67,19 @@ pub struct FxaaPrepass {
 impl Default for FxaaPrepass {
     fn default() -> Self {
         FxaaPrepass {
+            enabled: false,
+            edge_threshold: Sensitivity::UltraLow,
+            edge_threshold_min: Sensitivity::UltraLow,
+        }
+    }
+}
+
+impl FxaaPrepass {
+    pub fn ultra_low() -> Self {
+        FxaaPrepass {
             enabled: true,
-            edge_threshold: Sensitivity::Low,
-            edge_threshold_min: Sensitivity::Low,
+            edge_threshold: Sensitivity::UltraLow,
+            edge_threshold_min: Sensitivity::UltraLow,
         }
     }
 }
@@ -77,8 +89,8 @@ const FXAA_SHADER_HANDLE: Handle<Shader> = Handle::weak_from_u128(92384752093847
 pub const FXAA_PREPASS: &str = "taa_fxaa_prepass";
 
 /// Adds support for Fast Approximate Anti-Aliasing (FXAA)
-pub struct FxaaPlugin;
-impl Plugin for FxaaPlugin {
+pub struct FxaaPrepassPlugin;
+impl Plugin for FxaaPrepassPlugin {
     fn build(&self, app: &mut App) {
         load_internal_asset!(app, FXAA_SHADER_HANDLE, "fxaa.wgsl", Shader::from_wgsl);
 

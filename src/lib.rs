@@ -36,6 +36,7 @@ use bevy::render::{
     view::{ExtractedView, Msaa, ViewTarget},
     ExtractSchedule, MainWorld, Render, RenderApp, RenderSet,
 };
+use fxaa::FxaaPrepass;
 
 use crate::fxaa::FxaaNode;
 
@@ -59,7 +60,8 @@ impl Plugin for TAAPlugin {
     fn build(&self, app: &mut App) {
         load_internal_asset!(app, TAA_SHADER_HANDLE, "taa.wgsl", Shader::from_wgsl);
 
-        app.insert_resource(Msaa::Off)
+        app.add_plugins(fxaa::FxaaPrepassPlugin)
+            .insert_resource(Msaa::Off)
             .register_type::<TAASettings>()
             .add_plugins(UniformComponentPlugin::<TAAParameters>::default());
 
@@ -104,6 +106,7 @@ impl Plugin for TAAPlugin {
 /// Bundle to apply temporal anti-aliasing.
 #[derive(Bundle, Default)]
 pub struct TAABundle {
+    pub fxaa_prepass: FxaaPrepass,
     pub settings: TAASettings,
     pub jitter: TemporalJitter,
     pub depth_prepass: DepthPrepass,
@@ -118,6 +121,20 @@ impl TAABundle {
                 parameters: TAAParameters {
                     default_history_blend_rate: 0.5,
                     min_history_blend_rate: 0.5,
+                    ..default()
+                },
+                ..default()
+            },
+            ..default()
+        }
+    }
+    pub fn sample3() -> TAABundle {
+        TAABundle {
+            settings: TAASettings {
+                sequence: TAASequence::Sample3,
+                parameters: TAAParameters {
+                    default_history_blend_rate: 0.0,
+                    min_history_blend_rate: 0.0,
                     ..default()
                 },
                 ..default()
@@ -155,9 +172,10 @@ impl TAABundle {
     }
 }
 
-#[derive(Reflect, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 pub enum TAASequence {
     Sample2,
+    Sample3,
     Sample4,
     #[default]
     Sample8,
@@ -168,7 +186,13 @@ impl TAASequence {
         match self {
             // https://advances.realtimerendering.com/s2017/DecimaSiggraph2017.pdf
             TAASequence::Sample2 => [vec2(0.0, -0.5), vec2(-0.5, 0.0)][frame_count as usize % 2],
+            //TAASequence::Sample2 => {
+            //    [vec2(0.25, -0.25), vec2(-0.25, 0.25)][frame_count as usize % 2]
+            //}
             // RGGS https://blog.demofox.org/2015/04/23/4-rook-antialiasing-rgss/
+            TAASequence::Sample3 => {
+                [vec2(0.0, -0.5), vec2(-0.5, 0.0), vec2(0.25, 0.25)][frame_count as usize % 3]
+            }
             TAASequence::Sample4 => [
                 vec2(1.0 / 8.0, 3.0 / 8.0),
                 vec2(-3.0 / 8.0, 1.0 / 8.0),
@@ -198,10 +222,10 @@ impl TAASequence {
 /// TAA works by blending (averaging) each frame with the past few frames.
 ///
 /// If no [`MipBias`] component is attached to the camera, TAA will add a MipBias(-1.0) component.
-#[derive(Component, Reflect, Clone)]
+#[derive(Component, Reflect, Clone, Debug)]
 pub struct TAASettings {
-    sequence: TAASequence,
-    parameters: TAAParameters,
+    pub sequence: TAASequence,
+    pub parameters: TAAParameters,
 
     /// Set to true to delete the saved temporal history (past frames).
     ///
@@ -213,7 +237,7 @@ pub struct TAASettings {
     pub reset: bool,
 }
 
-#[derive(Component, ShaderType, Reflect, Default, Copy, Clone)]
+#[derive(Component, ShaderType, Reflect, Default, Copy, Clone, Debug)]
 pub struct TAAParameters {
     default_history_blend_rate: f32,
     min_history_blend_rate: f32,
@@ -306,23 +330,33 @@ impl ViewNode for TAANode {
                         BindGroupEntry {
                             binding: 4,
                             resource: BindingResource::TextureView(
-                                &taa_history_textures.motion_read.default_view,
+                                &taa_history_textures.read2.default_view,
                             ),
                         },
                         BindGroupEntry {
                             binding: 5,
+                            resource: BindingResource::Sampler(&pipelines.linear_samplers[2]),
+                        },
+                        BindGroupEntry {
+                            binding: 6,
+                            resource: BindingResource::TextureView(
+                                &taa_history_textures.motion_read.default_view,
+                            ),
+                        },
+                        BindGroupEntry {
+                            binding: 7,
                             resource: BindingResource::TextureView(
                                 &prepass_motion_vectors_texture.default_view,
                             ),
                         },
                         BindGroupEntry {
-                            binding: 6,
+                            binding: 8,
                             resource: BindingResource::TextureView(
                                 &prepass_depth_texture.default_view,
                             ),
                         },
                         BindGroupEntry {
-                            binding: 7,
+                            binding: 9,
                             resource: uniforms,
                         },
                     ],
@@ -365,7 +399,7 @@ impl ViewNode for TAANode {
 #[derive(Resource)]
 struct TAAPipeline {
     taa_bind_group_layout: BindGroupLayout,
-    linear_samplers: [Sampler; 2],
+    linear_samplers: [Sampler; 3],
 }
 
 impl FromWorld for TAAPipeline {
@@ -380,6 +414,7 @@ impl FromWorld for TAAPipeline {
         };
 
         let linear_samplers = [
+            render_device.create_sampler(&linear_discriptor),
             render_device.create_sampler(&linear_discriptor),
             render_device.create_sampler(&linear_discriptor),
         ];
@@ -424,7 +459,7 @@ impl FromWorld for TAAPipeline {
                         ty: BindingType::Sampler(SamplerBindingType::Filtering),
                         count: None,
                     },
-                    // TAA Motion History (read)
+                    // TAA History 2 (read)
                     BindGroupLayoutEntry {
                         binding: 4,
                         visibility: ShaderStages::FRAGMENT,
@@ -435,9 +470,27 @@ impl FromWorld for TAAPipeline {
                         },
                         count: None,
                     },
-                    // Motion Vectors
+                    // TAA History 2 Linear sampler
                     BindGroupLayoutEntry {
                         binding: 5,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // TAA Motion History (read)
+                    BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: true },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // Motion Vectors
+                    BindGroupLayoutEntry {
+                        binding: 7,
                         visibility: ShaderStages::FRAGMENT,
                         ty: BindingType::Texture {
                             sample_type: TextureSampleType::Float { filterable: true },
@@ -448,7 +501,7 @@ impl FromWorld for TAAPipeline {
                     },
                     // Depth
                     BindGroupLayoutEntry {
-                        binding: 6,
+                        binding: 8,
                         visibility: ShaderStages::FRAGMENT,
                         ty: BindingType::Texture {
                             sample_type: TextureSampleType::Depth,
@@ -459,7 +512,7 @@ impl FromWorld for TAAPipeline {
                     },
                     // TAA Parameters
                     BindGroupLayoutEntry {
-                        binding: 7,
+                        binding: 9,
                         ty: BindingType::Buffer {
                             ty: BufferBindingType::Uniform,
                             has_dynamic_offset: true,
@@ -508,7 +561,14 @@ impl SpecializedRenderPipeline for TAAPipeline {
         shader_defs.push("WEBGL2".into());
 
         match key.sequence {
-            TAASequence::Sample2 => shader_defs.push("SAMPLE2".into()),
+            TAASequence::Sample2 => {
+                shader_defs.push("SAMPLE2".into());
+                shader_defs.push("SAMPLE2_OR_SAMPLE3".into())
+            }
+            TAASequence::Sample3 => {
+                shader_defs.push("SAMPLE3".into());
+                shader_defs.push("SAMPLE2_OR_SAMPLE3".into())
+            }
             TAASequence::Sample4 => shader_defs.push("SAMPLE4".into()),
             TAASequence::Sample8 => shader_defs.push("SAMPLE8".into()),
         }
@@ -588,6 +648,7 @@ fn prepare_taa_jitter_and_mip_bias(
 struct TAAHistoryTextures {
     write: CachedTexture,
     read: CachedTexture,
+    read2: CachedTexture,
     motion_write: CachedTexture,
     motion_read: CachedTexture,
 }
@@ -597,9 +658,9 @@ fn prepare_taa_history_textures(
     mut texture_cache: ResMut<TextureCache>,
     render_device: Res<RenderDevice>,
     frame_count: Res<FrameCount>,
-    views: Query<(Entity, &ExtractedCamera, &ExtractedView), With<TAASettings>>,
+    views: Query<(Entity, &ExtractedCamera, &ExtractedView, &TAASettings)>,
 ) {
-    for (entity, camera, view) in &views {
+    for (entity, camera, view, settings) in &views {
         if let Some(physical_viewport_size) = camera.physical_viewport_size {
             let mut texture_descriptor = TextureDescriptor {
                 label: None,
@@ -639,7 +700,7 @@ fn prepare_taa_history_textures(
             let history_1_texture = texture_cache.get(&render_device, texture_descriptor.clone());
 
             texture_descriptor.label = Some("taa_history_2_texture");
-            let history_2_texture = texture_cache.get(&render_device, texture_descriptor);
+            let history_2_texture = texture_cache.get(&render_device, texture_descriptor.clone());
 
             motion_texture_descriptor.label = Some("taa_history_1_texture");
             let history_motion_1_texture =
@@ -649,19 +710,57 @@ fn prepare_taa_history_textures(
             let history_motion_2_texture =
                 texture_cache.get(&render_device, motion_texture_descriptor);
 
-            let textures = if frame_count.0 % 2 == 0 {
-                TAAHistoryTextures {
-                    write: history_1_texture,
-                    read: history_2_texture,
-                    motion_write: history_motion_1_texture,
-                    motion_read: history_motion_2_texture,
+            // TODO only create when 3 are needed
+            texture_descriptor.label = Some("taa_history_2_texture");
+            let history_3_texture = texture_cache.get(&render_device, texture_descriptor.clone());
+            let textures = if TAASequence::Sample3 == settings.sequence {
+                let (m1, m2) = if frame_count.0 % 2 == 0 {
+                    (history_motion_1_texture, history_motion_2_texture)
+                } else {
+                    (history_motion_2_texture, history_motion_1_texture)
+                };
+                if frame_count.0 % 3 == 0 {
+                    TAAHistoryTextures {
+                        write: history_1_texture,
+                        read: history_2_texture,
+                        read2: history_3_texture,
+                        motion_write: m1,
+                        motion_read: m2,
+                    }
+                } else if frame_count.0 % 3 == 1 {
+                    TAAHistoryTextures {
+                        write: history_3_texture,
+                        read: history_1_texture,
+                        read2: history_2_texture,
+                        motion_write: m1,
+                        motion_read: m2,
+                    }
+                } else {
+                    TAAHistoryTextures {
+                        write: history_2_texture,
+                        read: history_3_texture,
+                        read2: history_1_texture,
+                        motion_write: m1,
+                        motion_read: m2,
+                    }
                 }
             } else {
-                TAAHistoryTextures {
-                    write: history_2_texture,
-                    read: history_1_texture,
-                    motion_write: history_motion_2_texture,
-                    motion_read: history_motion_1_texture,
+                if frame_count.0 % 2 == 0 {
+                    TAAHistoryTextures {
+                        write: history_1_texture,
+                        read: history_2_texture,
+                        read2: history_3_texture,
+                        motion_write: history_motion_1_texture,
+                        motion_read: history_motion_2_texture,
+                    }
+                } else {
+                    TAAHistoryTextures {
+                        write: history_2_texture,
+                        read: history_1_texture,
+                        read2: history_3_texture,
+                        motion_write: history_motion_2_texture,
+                        motion_read: history_motion_1_texture,
+                    }
                 }
             };
 
