@@ -38,7 +38,7 @@
 
 // The minimum amount of local contrast required to apply algorithm.
 #ifdef EDGE_THRESH_MIN_ULTRA_LOW
-    const EDGE_THRESHOLD_MAX: f32 = 0.35;
+    const EDGE_THRESHOLD_MAX: f32 = 0.4;
 #endif
 
 #ifdef EDGE_THRESH_LOW
@@ -279,5 +279,5 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // Read the color at the new UV coordinates, and use it.
     var finalColor = textureSampleLevel(screenTexture, samp, finalUv, 0.0).rgb;
     //return vec4<f32>(finalColor, centerSample.a);
-    return vec4<f32>(mix(finalColor, centerSample.rgb, 0.8), centerSample.a);
+    return vec4<f32>(mix(finalColor, centerSample.rgb, 0.75), centerSample.a);
 }
