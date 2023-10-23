@@ -163,19 +163,12 @@ fn modify_aa(
     if let Some(ref mut _taa) = taa {
         if keys.just_pressed(KeyCode::Q) {
             camera.insert(TAABundle::sample2());
-            //taa.sequence = TAASequence::Sample2;
         }
         if keys.just_pressed(KeyCode::W) {
-            camera.insert(TAABundle::sample3());
-            //taa.sequence = TAASequence::Sample3;
+            camera.insert(TAABundle::sample4());
         }
         if keys.just_pressed(KeyCode::E) {
-            camera.insert(TAABundle::sample4());
-            //taa.sequence = TAASequence::Sample4;
-        }
-        if keys.just_pressed(KeyCode::R) {
             camera.insert(TAABundle::sample8());
-            //taa.sequence = TAASequence::Sample8;
         }
     }
 
@@ -184,7 +177,7 @@ fn modify_aa(
         *msaa = Msaa::Off;
         camera.remove::<Fxaa>();
 
-        camera.insert(TAABundle::sample3());
+        camera.insert(TAABundle::sample8());
     }
 
     // Rotate Camera
@@ -328,20 +321,15 @@ fn update_ui(
         } else {
             ui.push_str("(Q) 2\n");
         }
-        if taa.sequence == TAASequence::Sample3 {
-            ui.push_str("(W) *3*\n");
-        } else {
-            ui.push_str("(W) 3\n");
-        }
         if taa.sequence == TAASequence::Sample4 {
-            ui.push_str("(E) *4*\n");
+            ui.push_str("(W) *4*\n");
         } else {
-            ui.push_str("(E) 4\n");
+            ui.push_str("(W) 4\n");
         }
         if taa.sequence == TAASequence::Sample8 {
-            ui.push_str("(R) *8*\n");
+            ui.push_str("(E) *8*\n");
         } else {
-            ui.push_str("(R) 8\n");
+            ui.push_str("(E) 8\n");
         }
     }
 
@@ -536,7 +524,7 @@ fn setup_scene(
     if screenshot_taa.is_some() {
         camera.insert((
             //FxaaPrepass::default()
-            TAABundle::sample3(),
+            TAABundle::sample2(),
         ));
     }
 

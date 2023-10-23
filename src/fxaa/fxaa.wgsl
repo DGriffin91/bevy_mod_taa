@@ -278,5 +278,6 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
     // Read the color at the new UV coordinates, and use it.
     var finalColor = textureSampleLevel(screenTexture, samp, finalUv, 0.0).rgb;
-    return vec4<f32>(finalColor, centerSample.a);
+    //return vec4<f32>(finalColor, centerSample.a);
+    return vec4<f32>(mix(finalColor, centerSample.rgb, 0.8), centerSample.a);
 }
