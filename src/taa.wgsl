@@ -217,21 +217,25 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     let history_uv = uv - closest_motion_vector;
     let previous_motion_vector = textureLoad(motion_history, vec2<i32>(history_uv * texture_size), 0).rg;
 #ifdef SAMPLE2
-    var center_color_bicubic = texture_sample_bicubic_catmull_rom(view_target, view_linear_sampler, uv, texture_size).rgb;
+    // Softens just slightly, but much less than bicubic_b
+    var center_color = textureSampleLevel(view_target, view_linear_sampler, uv + vec2(-0.15, -0.15) * texel_size, 0.0).rgb * 0.25;
+    center_color    += textureSampleLevel(view_target, view_linear_sampler, uv + vec2( 0.15, -0.15) * texel_size, 0.0).rgb * 0.25;
+    center_color    += textureSampleLevel(view_target, view_linear_sampler, uv + vec2( 0.15,  0.15) * texel_size, 0.0).rgb * 0.25;
+    center_color    += textureSampleLevel(view_target, view_linear_sampler, uv + vec2(-0.15,  0.15) * texel_size, 0.0).rgb * 0.25;
 #else
-    var center_color_bicubic = texture_sample_bicubic_b(view_target, view_linear_sampler, uv, texture_size).rgb;
+    var center_color = texture_sample_bicubic_b(view_target, view_linear_sampler, uv, texture_size).rgb;
 #endif
 
 #ifdef TONEMAP
-        center_color_bicubic = tonemap(center_color_bicubic);
+        center_color = tonemap(center_color);
 #endif
 
     var reprojection_fail = false;
     // Fall back to bicubic if the reprojected uv is off screen 
     if reprojection_fail ||
-        all(history_uv <= 0.0) ||
-        all(history_uv >= 1.0) {
-        current_color = center_color_bicubic;
+        any(history_uv <= 0.0) ||
+        any(history_uv >= 1.0) {
+        current_color = center_color;
         history_confidence = 1.0;
         reprojection_fail = true;
     } else {
@@ -279,7 +283,7 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     // See Velocity Rejection: https://www.elopezr.com/temporal-aa-and-the-quest-for-the-holy-trail/
     let motion_distance = distance(previous_motion_vector, closest_motion_vector);
     let motion_disocclusion = saturate((motion_distance - 0.001) * 120.0); //The 120.0 was just hand tuned, needs further testing.
-    current_color = mix(current_color, center_color_bicubic, motion_disocclusion);
+    current_color = mix(current_color, center_color, motion_disocclusion);
 #endif // #ifndef RESET
 
 
