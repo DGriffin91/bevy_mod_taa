@@ -6,15 +6,19 @@
 
 #import bevy_pbr::mesh_view_bindings view, globals
 #import bevy_pbr::utils PI
+#import bevy_pbr::mesh_view_bindings as vb
+
 const PI_SQ: f32 = 9.8696044010893586188344910;
 
 // Controls how much to blend between the current and past samples
 // Lower numbers = less of the current sample and more of the past sample = more smoothing
 struct TAAUniform {
+    inverse_view_proj: mat4x4<f32>, // not jittered
+    prev_inverse_view_proj: mat4x4<f32>, // not jittered
     default_history_blend_rate: f32, // Default blend rate to use when no confidence in history
     min_history_blend_rate: f32, // Minimum blend rate allowed, to ensure at least some of the current sample is used
     velocity_rejection: f32,
-    future2: f32,
+    depth_rejection_px_radius: f32,
 };
 
 #import bevy_core_pipeline::fullscreen_vertex_shader  FullscreenVertexOutput
@@ -26,7 +30,7 @@ struct TAAUniform {
 @group(0) @binding(24) var motion_history: texture_2d<f32>;
 @group(0) @binding(25) var motion_vectors: texture_2d<f32>;
 @group(0) @binding(26) var depth: texture_depth_2d;
-@group(0) @binding(27) var<uniform> prams: TAAUniform;
+@group(0) @binding(27) var<uniform> taa: TAAUniform;
 
 struct Output {
     @location(0) view_target: vec4<f32>,
@@ -40,6 +44,23 @@ fn world_space_pixel_radius(linear_depth: f32) -> f32 {
     let is_orthographic = view.projection[3].w == 1.0;
     let unproject = 1.0 / (0.5 * view.viewport.w * view.projection[1][1]);
     return unproject * select(linear_depth, 1.0, is_orthographic);
+}
+
+/// Convert uv [0.0 .. 1.0] coordinate to ndc space xy [-1.0 .. 1.0]
+fn uv_to_ndc(uv: vec2<f32>) -> vec2<f32> {
+    return (uv - vec2(0.5)) * vec2(2.0, -2.0);
+}
+
+/// Convert a ndc space position to world space
+fn position_ndc_to_world(ndc_pos: vec3<f32>) -> vec3<f32> {
+    let world_pos = taa.inverse_view_proj * vec4(ndc_pos, 1.0);
+    return world_pos.xyz / world_pos.w;
+}
+
+/// Convert a ndc space position to world space
+fn position_history_ndc_to_world(ndc_pos: vec3<f32>) -> vec3<f32> {
+    let world_pos = taa.prev_inverse_view_proj * vec4(ndc_pos, 1.0);
+    return world_pos.xyz / world_pos.w;
 }
 
 fn cubic_b(v: f32) -> vec4<f32> {
@@ -183,8 +204,9 @@ fn sample_view_target(uv: vec2<f32>, texture_size: vec2<f32>) -> vec3<f32> {
 // Dilate edges by picking the closest motion vector from 3x3 neighborhood
 // https://advances.realtimerendering.com/s2014/index.html#_HIGH-QUALITY_TEMPORAL_SUPERSAMPLING, slide 27
 // https://www.elopezr.com/temporal-aa-and-the-quest-for-the-holy-trail/, Depth Dilation
-fn get_closest_motion_vector_depth(uv: vec2<f32>, texture_size: vec2<f32>) -> vec3<f32> {
+fn get_closest_motion_vector_depth(uv: vec2<f32>, texture_size: vec2<f32>) -> vec4<f32> {
     var closest_depth = 0.0;
+    var farthest_depth = 1.0;
     var closest_offset = vec2(0.0);
 #ifndef WEBGL2
     for(var y = -1; y <= 1; y += 1) {
@@ -195,32 +217,32 @@ fn get_closest_motion_vector_depth(uv: vec2<f32>, texture_size: vec2<f32>) -> ve
                 closest_depth = depth;
                 closest_offset = uv_offset;
             }
+            farthest_depth = min(farthest_depth, depth);
         }
     }
 #endif //WEBGL2
-    return vec3(textureLoad(motion_vectors, vec2<i32>((uv + closest_offset) * texture_size), 0).rg, closest_depth);
+    return vec4(textureLoad(motion_vectors, vec2<i32>((uv + closest_offset) * texture_size), 0).rg, closest_depth, farthest_depth);
 }
 
 @fragment
-fn taa(@location(0) uv: vec2<f32>) -> Output {
+fn fragment(@location(0) uv: vec2<f32>) -> Output {
     let texture_size = vec2<f32>(textureDimensions(view_target));
     let texel_size = 1.0 / texture_size;
     let frag_coord = uv * texture_size;
     let ifrag_coord = vec2<i32>(frag_coord);
+    var center_depth = 0.0;
 
     // Fetch the current sample
     var original_color = textureLoad(view_target, ifrag_coord, 0);
     
     var current_color = original_color.rgb;
 #ifdef TONEMAP
-    current_color = tonemap(current_color);
     original_color = vec4(tonemap(original_color.rgb), original_color.a);
+    current_color = original_color.rgb;
 #endif
 
     let closest_motion_vector_depth = get_closest_motion_vector_depth(uv, texture_size);
-
     let closest_motion_vector = closest_motion_vector_depth.xy;
-    let closest_depth = closest_motion_vector_depth.z;
 
 #ifndef RESET
     // How confident we are that the history is representative of the current frame
@@ -229,7 +251,9 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
 
     // Reproject to find the equivalent sample from the past
     let history_uv = uv - closest_motion_vector;
-    let previous_motion_vector = textureLoad(motion_history, vec2<i32>(history_uv * texture_size), 0).rg;
+    let history_motion_vector_depth = textureLoad(motion_history, vec2<i32>(history_uv * texture_size), 0);
+    let history_motion_vector = history_motion_vector_depth.xy;
+    let history_depth = history_motion_vector_depth.z;
 #ifdef SAMPLE2
     // Softens just slightly, but much less than bicubic_b
     var filtered_color = textureSampleLevel(view_target, view_linear_sampler, uv + vec2(-0.15, -0.15) * texel_size, 0.0).rgb * 0.25;
@@ -302,16 +326,43 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     // Blend current and past sample
     // Use more of the history if we're confident in it (reduces noise when there is no motion)
     // https://hhoppe.com/supersample.pdf, section 4.1
-    var current_color_factor = clamp(1.0 / history_confidence, prams.min_history_blend_rate, prams.default_history_blend_rate);
+    var current_color_factor = clamp(1.0 / history_confidence, taa.min_history_blend_rate, taa.default_history_blend_rate);
     current_color_factor = select(current_color_factor, 1.0, reprojection_fail);
     current_color = mix(history_color, current_color, current_color_factor);
 
 #ifdef VELOCITY_REJECTION
     // See Velocity Rejection: https://www.elopezr.com/temporal-aa-and-the-quest-for-the-holy-trail/
-    let motion_distance = distance(previous_motion_vector, closest_motion_vector);
-    let motion_disocclusion = saturate((motion_distance - 0.001) * prams.velocity_rejection);
+    let motion_distance = distance(history_motion_vector, closest_motion_vector);
+    let motion_disocclusion = saturate((motion_distance - 0.001) * taa.velocity_rejection);
     current_color = mix(current_color, filtered_color, motion_disocclusion);
 #endif //VELOCITY_REJECTION
+
+#ifdef DEPTH_REJECTION
+#ifndef WEBGL2
+    let closest_depth = closest_motion_vector_depth.z;
+    let farthest_depth = closest_motion_vector_depth.w;
+    center_depth = textureLoad(depth, vec2<i32>(uv * texture_size), 0);
+
+    let closest_pixel_radius = world_space_pixel_radius(closest_depth);
+    let farthest_pixel_radius = world_space_pixel_radius(farthest_depth);
+    let avg_pixel_radius = ((closest_pixel_radius + farthest_pixel_radius) * 0.5);
+
+    let history_closest_world_position = position_history_ndc_to_world(vec3(uv_to_ndc(history_uv), history_depth));
+    let farthest_world_position = position_ndc_to_world(vec3(uv_to_ndc(uv), farthest_depth));
+    let closest_world_position = position_ndc_to_world(vec3(uv_to_ndc(uv), closest_depth));
+
+    let closest_dist = distance(view.world_position.xyz, closest_world_position);
+    let farthest_dist = distance(view.world_position.xyz, farthest_world_position);
+    let history_dist = distance(view.world_position.xyz, history_closest_world_position);
+
+    let clamped_dist = clamp(history_dist, 
+                             closest_dist - closest_pixel_radius * taa.depth_rejection_px_radius, 
+                             farthest_dist + farthest_pixel_radius * taa.depth_rejection_px_radius);
+    let px_dist = distance(clamped_dist, history_dist) / avg_pixel_radius;
+    let factor = saturate((px_dist) * 0.1);
+    current_color = mix(current_color, filtered_color, factor);
+#endif //#ifndef WEBGL2
+#endif //DEPTH_REJECTION
 
 #endif // #ifndef RESET
 
@@ -320,7 +371,7 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     var out: Output;
 
 #ifdef RESET
-    let history_confidence = 1.0 / prams.min_history_blend_rate;
+    let history_confidence = 1.0 / taa.min_history_blend_rate;
 #endif // RESET
 
 #ifdef SAMPLE2
@@ -334,6 +385,6 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
 #endif // TONEMAP
 
     out.view_target = vec4(current_color, original_color.a);
-    out.motion_history = vec4(textureLoad(motion_vectors, vec2<i32>(uv * texture_size), 0).xy, closest_depth, 0.0);
+    out.motion_history = vec4(textureLoad(motion_vectors, vec2<i32>(uv * texture_size), 0).xy, center_depth, 0.0);
     return out;
 }

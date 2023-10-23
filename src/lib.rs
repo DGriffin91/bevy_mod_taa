@@ -11,8 +11,8 @@ use bevy::ecs::{
     system::{Commands, Query, Res, ResMut, Resource},
     world::{FromWorld, World},
 };
-use bevy::math::vec2;
-use bevy::prelude::{default, Camera3d, Vec2};
+use bevy::math::{vec2, vec4};
+use bevy::prelude::{default, Camera3d, GlobalTransform, Local, Mat4, URect, Vec2};
 use bevy::reflect::Reflect;
 use bevy::render::extract_component::{
     ComponentUniforms, DynamicUniformIndex, UniformComponentPlugin,
@@ -200,10 +200,12 @@ pub enum ColorClippingMethod {
 
 #[derive(Component, ShaderType, Reflect, Default, Copy, Clone, Debug)]
 pub struct TAAUniforms {
+    inverse_view_proj: Mat4,
+    prev_inverse_view_proj: Mat4,
     default_history_blend_rate: f32,
     min_history_blend_rate: f32,
     velocity_rejection: f32,
-    future2: f32,
+    depth_rejection_px_radius: f32,
 }
 /// Component to apply temporal anti-aliasing to a 3D perspective camera.
 ///
@@ -217,7 +219,12 @@ pub struct TAASettings {
     pub sequence: TAASequence,
     pub variance_clipping: ColorClippingMethod,
 
+    /// Higher values are more sensitive / more likely to trigger rejection.
     pub velocity_rejection: Option<f32>,
+
+    /// Reject history depths that are outside the neighborhood range by this px radius
+    /// Lower values are more sensitive / more likely to trigger rejection.
+    pub depth_rejection_px_radius: Option<f32>,
 
     pub default_history_blend_rate: f32,
     pub min_history_blend_rate: f32,
@@ -238,6 +245,7 @@ impl Default for TAASettings {
             sequence: TAASequence::Sample8,
             variance_clipping: ColorClippingMethod::VarianceClipping,
             velocity_rejection: Some(120.0), //The 120.0 was just hand tuned, needs further testing.
+            depth_rejection_px_radius: Some(200.0), //The 200.0 was just hand tuned, needs further testing.
             reset: true,
             default_history_blend_rate: 0.2,
             min_history_blend_rate: 0.1,
@@ -540,6 +548,7 @@ struct TAAPipelineKey {
     hdr: bool,
     reset: bool,
     velocity_rejection: bool,
+    depth_rejection: bool,
     variance_clipping: ColorClippingMethod,
     sequence: TAASequence,
 }
@@ -563,6 +572,10 @@ impl SpecializedRenderPipeline for TAAPipeline {
 
         if key.velocity_rejection {
             shader_defs.push("VELOCITY_REJECTION".into())
+        }
+
+        if key.depth_rejection {
+            shader_defs.push("DEPTH_REJECTION".into())
         }
 
         match key.variance_clipping {
@@ -589,7 +602,7 @@ impl SpecializedRenderPipeline for TAAPipeline {
             fragment: Some(FragmentState {
                 shader: TAA_SHADER_HANDLE,
                 shader_defs,
-                entry_point: "taa".into(),
+                entry_point: "fragment".into(),
                 targets: vec![
                     Some(ColorTargetState {
                         format,
@@ -616,30 +629,82 @@ impl SpecializedRenderPipeline for TAAPipeline {
     }
 }
 
-fn extract_taa_settings(mut commands: Commands, mut main_world: ResMut<MainWorld>) {
-    let mut cameras_3d = main_world
-        .query_filtered::<(Entity, &Camera, &Projection, &mut TAASettings), (
-            With<Camera3d>,
-            With<TemporalJitter>,
-            With<DepthPrepass>,
-            With<MotionVectorPrepass>,
-        )>();
+fn extract_taa_settings(
+    mut commands: Commands,
+    mut main_world: ResMut<MainWorld>,
+    mut inverse_view_proj: Local<Mat4>,
+) {
+    let mut cameras_3d = main_world.query_filtered::<(
+        Entity,
+        &Camera,
+        &GlobalTransform,
+        &Projection,
+        &mut TAASettings,
+        &TemporalJitter,
+    ), (
+        With<Camera3d>,
+        With<DepthPrepass>,
+        With<MotionVectorPrepass>,
+    )>();
 
-    for (entity, camera, camera_projection, mut taa_settings) in
+    for (entity, camera, transform, camera_projection, mut taa_settings, _temporal_jitter) in
         cameras_3d.iter_mut(&mut main_world)
     {
-        let has_perspective_projection = matches!(camera_projection, Projection::Perspective(_));
-        if camera.is_active && has_perspective_projection {
-            commands
-                .get_or_spawn(entity)
-                .insert(taa_settings.clone())
-                .insert(TAAUniforms {
-                    default_history_blend_rate: taa_settings.default_history_blend_rate,
-                    min_history_blend_rate: taa_settings.min_history_blend_rate,
-                    velocity_rejection: taa_settings.velocity_rejection.unwrap_or(0.0),
-                    future2: 0.0,
-                });
-            taa_settings.reset = false;
+        if let (
+            Some(URect {
+                min: viewport_origin,
+                ..
+            }),
+            Some(viewport_size),
+        ) = (
+            camera.physical_viewport_rect(),
+            camera.physical_viewport_size(),
+        ) {
+            let _viewport = vec4(
+                viewport_origin.x as f32,
+                viewport_origin.y as f32,
+                viewport_size.x as f32,
+                viewport_size.y as f32,
+            );
+            let unjittered_projection = camera.projection_matrix();
+            let projection = unjittered_projection;
+
+            //temporal_jitter.jitter_projection(&mut projection, viewport.zw());
+
+            let inverse_projection = projection.inverse();
+            let view = transform.compute_matrix();
+            //let inverse_view = view.inverse();
+
+            //let view_proj = if temporal_jitter.is_some() {
+            //    projection * inverse_view
+            //} else {
+            //    camera_view
+            //        .view_projection
+            //        .unwrap_or_else(|| projection * inverse_view)
+            //};
+
+            let has_perspective_projection =
+                matches!(camera_projection, Projection::Perspective(_));
+
+            let prev_inverse_view_proj = *inverse_view_proj;
+            *inverse_view_proj = view * inverse_projection;
+
+            if camera.is_active && has_perspective_projection {
+                commands
+                    .get_or_spawn(entity)
+                    .insert(taa_settings.clone())
+                    .insert(TAAUniforms {
+                        inverse_view_proj: *inverse_view_proj,
+                        prev_inverse_view_proj,
+                        default_history_blend_rate: taa_settings.default_history_blend_rate,
+                        min_history_blend_rate: taa_settings.min_history_blend_rate,
+                        velocity_rejection: taa_settings.velocity_rejection.unwrap_or(0.0),
+                        depth_rejection_px_radius: taa_settings
+                            .depth_rejection_px_radius
+                            .unwrap_or(0.0),
+                    });
+                taa_settings.reset = false;
+            }
         }
     }
 }
@@ -759,6 +824,7 @@ fn prepare_taa_pipelines(
             variance_clipping: taa_settings.variance_clipping,
             sequence: taa_settings.sequence,
             velocity_rejection: taa_settings.velocity_rejection.is_some(),
+            depth_rejection: taa_settings.depth_rejection_px_radius.is_some(),
         };
         let pipeline_id = pipelines.specialize(&pipeline_cache, &pipeline, pipeline_key.clone());
 
