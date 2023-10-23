@@ -63,7 +63,7 @@ impl Plugin for TAAPlugin {
         app.add_plugins(fxaa::FxaaPrepassPlugin)
             .insert_resource(Msaa::Off)
             .register_type::<TAASettings>()
-            .add_plugins(UniformComponentPlugin::<TAAParameters>::default());
+            .add_plugins(UniformComponentPlugin::<TAAUniforms>::default());
 
         let Ok(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
@@ -119,11 +119,8 @@ impl TAABundle {
             fxaa_prepass: FxaaPrepass::ultra_low(),
             settings: TAASettings {
                 sequence: TAASequence::Sample2,
-                parameters: TAAParameters {
-                    default_history_blend_rate: 0.5,
-                    min_history_blend_rate: 0.5,
-                    ..default()
-                },
+                default_history_blend_rate: 0.5,
+                min_history_blend_rate: 0.5,
                 ..default()
             },
             ..default()
@@ -133,11 +130,8 @@ impl TAABundle {
         TAABundle {
             settings: TAASettings {
                 sequence: TAASequence::Sample4,
-                parameters: TAAParameters {
-                    default_history_blend_rate: 0.33,
-                    min_history_blend_rate: 0.25,
-                    ..default()
-                },
+                default_history_blend_rate: 0.33,
+                min_history_blend_rate: 0.25,
                 ..default()
             },
             ..default()
@@ -147,11 +141,8 @@ impl TAABundle {
         TAABundle {
             settings: TAASettings {
                 sequence: TAASequence::Sample8,
-                parameters: TAAParameters {
-                    default_history_blend_rate: 0.25,
-                    min_history_blend_rate: 0.125,
-                    ..default()
-                },
+                default_history_blend_rate: 0.2,
+                min_history_blend_rate: 0.1,
                 ..default()
             },
             ..default()
@@ -198,6 +189,20 @@ impl TAASequence {
     }
 }
 
+#[derive(Reflect, Clone, Debug, PartialEq, Eq, Hash, Copy)]
+pub enum ColorClippingMethod {
+    VarianceClipping,
+    Clamping,
+    None,
+}
+
+#[derive(Component, ShaderType, Reflect, Default, Copy, Clone, Debug)]
+pub struct TAAUniforms {
+    default_history_blend_rate: f32,
+    min_history_blend_rate: f32,
+    velocity_rejection: f32,
+    future2: f32,
+}
 /// Component to apply temporal anti-aliasing to a 3D perspective camera.
 ///
 /// Temporal anti-aliasing (TAA) is a form of image filtering, like
@@ -208,7 +213,12 @@ impl TAASequence {
 #[derive(Component, Reflect, Clone, Debug)]
 pub struct TAASettings {
     pub sequence: TAASequence,
-    pub parameters: TAAParameters,
+    pub variance_clipping: ColorClippingMethod,
+
+    pub velocity_rejection: Option<f32>,
+
+    pub default_history_blend_rate: f32,
+    pub min_history_blend_rate: f32,
 
     /// Set to true to delete the saved temporal history (past frames).
     ///
@@ -220,20 +230,15 @@ pub struct TAASettings {
     pub reset: bool,
 }
 
-#[derive(Component, ShaderType, Reflect, Default, Copy, Clone, Debug)]
-pub struct TAAParameters {
-    default_history_blend_rate: f32,
-    min_history_blend_rate: f32,
-    future1: f32,
-    future2: f32,
-}
-
 impl Default for TAASettings {
     fn default() -> Self {
         Self {
             sequence: TAASequence::Sample8,
+            variance_clipping: ColorClippingMethod::VarianceClipping,
+            velocity_rejection: Some(120.0), //The 120.0 was just hand tuned, needs further testing.
             reset: true,
-            parameters: TAAParameters::default(),
+            default_history_blend_rate: 0.2,
+            min_history_blend_rate: 0.1,
         }
     }
 }
@@ -248,7 +253,7 @@ impl ViewNode for TAANode {
         &'static TAAHistoryTextures,
         &'static ViewPrepassTextures,
         &'static TAAPipelineId,
-        &'static DynamicUniformIndex<TAAParameters>,
+        &'static DynamicUniformIndex<TAAUniforms>,
     );
 
     fn run(
@@ -279,7 +284,7 @@ impl ViewNode for TAANode {
             return Ok(());
         };
         let view_target = view_target.post_process_write();
-        let uniforms = world.resource::<ComponentUniforms<TAAParameters>>();
+        let uniforms = world.resource::<ComponentUniforms<TAAUniforms>>();
 
         let Some(uniforms) = uniforms.binding() else {
             return Ok(());
@@ -470,7 +475,7 @@ impl FromWorld for TAAPipeline {
                         ty: BindingType::Buffer {
                             ty: BufferBindingType::Uniform,
                             has_dynamic_offset: true,
-                            min_binding_size: Some(TAAParameters::min_size()),
+                            min_binding_size: Some(TAAUniforms::min_size()),
                         },
                         visibility: ShaderStages::FRAGMENT,
                         count: None,
@@ -489,6 +494,8 @@ impl FromWorld for TAAPipeline {
 struct TAAPipelineKey {
     hdr: bool,
     reset: bool,
+    velocity_rejection: bool,
+    variance_clipping: ColorClippingMethod,
     sequence: TAASequence,
 }
 
@@ -507,6 +514,16 @@ impl SpecializedRenderPipeline for TAAPipeline {
 
         if key.reset {
             shader_defs.push("RESET".into());
+        }
+
+        if key.velocity_rejection {
+            shader_defs.push("VELOCITY_REJECTION".into())
+        }
+
+        match key.variance_clipping {
+            ColorClippingMethod::VarianceClipping => shader_defs.push("VARIANCE_CLIPPING".into()),
+            ColorClippingMethod::Clamping => shader_defs.push("CLAMPING".into()),
+            ColorClippingMethod::None => shader_defs.push("NO_COLOR_CLAMPING".into()),
         }
 
         // TODO webgl is not a bevy_mod_taa feature.
@@ -571,7 +588,12 @@ fn extract_taa_settings(mut commands: Commands, mut main_world: ResMut<MainWorld
             commands
                 .get_or_spawn(entity)
                 .insert(taa_settings.clone())
-                .insert(taa_settings.parameters);
+                .insert(TAAUniforms {
+                    default_history_blend_rate: taa_settings.default_history_blend_rate,
+                    min_history_blend_rate: taa_settings.min_history_blend_rate,
+                    velocity_rejection: taa_settings.velocity_rejection.unwrap_or(0.0),
+                    future2: 0.0,
+                });
             taa_settings.reset = false;
         }
     }
@@ -689,7 +711,9 @@ fn prepare_taa_pipelines(
         let mut pipeline_key = TAAPipelineKey {
             hdr: view.hdr,
             reset: taa_settings.reset,
+            variance_clipping: taa_settings.variance_clipping,
             sequence: taa_settings.sequence,
+            velocity_rejection: taa_settings.velocity_rejection.is_some(),
         };
         let pipeline_id = pipelines.specialize(&pipeline_cache, &pipeline, pipeline_key.clone());
 

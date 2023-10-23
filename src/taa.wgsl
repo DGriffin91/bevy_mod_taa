@@ -9,10 +9,10 @@ const PI_SQ: f32 = 9.8696044010893586188344910;
 
 // Controls how much to blend between the current and past samples
 // Lower numbers = less of the current sample and more of the past sample = more smoothing
-struct TAAParameters {
+struct TAAUniform {
     default_history_blend_rate: f32, // Default blend rate to use when no confidence in history
     min_history_blend_rate: f32, // Minimum blend rate allowed, to ensure at least some of the current sample is used
-    future1: f32,
+    velocity_rejection: f32,
     future2: f32,
 };
 
@@ -25,7 +25,7 @@ struct TAAParameters {
 @group(0) @binding(4) var motion_history: texture_2d<f32>;
 @group(0) @binding(5) var motion_vectors: texture_2d<f32>;
 @group(0) @binding(6) var depth: texture_depth_2d;
-@group(0) @binding(7) var<uniform> prams: TAAParameters;
+@group(0) @binding(7) var<uniform> prams: TAAUniform;
 
 struct Output {
     @location(0) view_target: vec4<f32>,
@@ -59,10 +59,10 @@ fn texture_sample_bicubic_b(tex: texture_2d<f32>, tex_sampler: sampler, uv: vec2
     
     offset = offset * (1.0 / texture_size).xxyy;
     
-    let sample0 = textureSample(tex, tex_sampler, offset.xz);
-    let sample1 = textureSample(tex, tex_sampler, offset.yz);
-    let sample2 = textureSample(tex, tex_sampler, offset.xw);
-    let sample3 = textureSample(tex, tex_sampler, offset.yw);
+    let sample0 = textureSampleLevel(tex, tex_sampler, offset.xz, 0.0);
+    let sample1 = textureSampleLevel(tex, tex_sampler, offset.yz, 0.0);
+    let sample2 = textureSampleLevel(tex, tex_sampler, offset.xw, 0.0);
+    let sample3 = textureSampleLevel(tex, tex_sampler, offset.yw, 0.0);
 
     let sx = s.x / (s.x + s.y);
     let sy = s.z / (s.z + s.w);
@@ -196,9 +196,11 @@ fn get_closest_motion_vector(uv: vec2<f32>, texture_size: vec2<f32>) -> vec2<f32
 fn taa(@location(0) uv: vec2<f32>) -> Output {
     let texture_size = vec2<f32>(textureDimensions(view_target));
     let texel_size = 1.0 / texture_size;
+    let frag_coord = uv * texture_size;
+    let ifrag_coord = vec2<i32>(frag_coord);
 
     // Fetch the current sample
-    var original_color = textureLoad(view_target, vec2<i32>(uv * texture_size), 0);
+    var original_color = textureLoad(view_target, ifrag_coord, 0);
     
     var current_color = original_color.rgb;
 #ifdef TONEMAP
@@ -210,7 +212,7 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     let closest_motion_vector = get_closest_motion_vector(uv, texture_size);
 
     // How confident we are that the history is representative of the current frame
-    var history_confidence = textureLoad(history, vec2<i32>(uv * texture_size), 0).a;
+    var history_confidence = textureLoad(history, ifrag_coord, 0).a;
     var history_color = vec3(0.0);
 
     // Reproject to find the equivalent sample from the past
@@ -218,16 +220,16 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     let previous_motion_vector = textureLoad(motion_history, vec2<i32>(history_uv * texture_size), 0).rg;
 #ifdef SAMPLE2
     // Softens just slightly, but much less than bicubic_b
-    var center_color = textureSampleLevel(view_target, view_linear_sampler, uv + vec2(-0.15, -0.15) * texel_size, 0.0).rgb * 0.25;
-    center_color    += textureSampleLevel(view_target, view_linear_sampler, uv + vec2( 0.15, -0.15) * texel_size, 0.0).rgb * 0.25;
-    center_color    += textureSampleLevel(view_target, view_linear_sampler, uv + vec2( 0.15,  0.15) * texel_size, 0.0).rgb * 0.25;
-    center_color    += textureSampleLevel(view_target, view_linear_sampler, uv + vec2(-0.15,  0.15) * texel_size, 0.0).rgb * 0.25;
+    var filtered_color = textureSampleLevel(view_target, view_linear_sampler, uv + vec2(-0.15, -0.15) * texel_size, 0.0).rgb * 0.25;
+    filtered_color    += textureSampleLevel(view_target, view_linear_sampler, uv + vec2( 0.15, -0.15) * texel_size, 0.0).rgb * 0.25;
+    filtered_color    += textureSampleLevel(view_target, view_linear_sampler, uv + vec2( 0.15,  0.15) * texel_size, 0.0).rgb * 0.25;
+    filtered_color    += textureSampleLevel(view_target, view_linear_sampler, uv + vec2(-0.15,  0.15) * texel_size, 0.0).rgb * 0.25;
 #else
-    var center_color = texture_sample_bicubic_b(view_target, view_linear_sampler, uv, texture_size).rgb;
+    var filtered_color = texture_sample_bicubic_b(view_target, view_linear_sampler, uv, texture_size).rgb;
 #endif
 
 #ifdef TONEMAP
-        center_color = tonemap(center_color);
+        filtered_color = tonemap(filtered_color);
 #endif
 
     var reprojection_fail = false;
@@ -235,33 +237,45 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     if reprojection_fail ||
         any(history_uv <= 0.0) ||
         any(history_uv >= 1.0) {
-        current_color = center_color;
+        current_color = filtered_color;
         history_confidence = 1.0;
         reprojection_fail = true;
     } else {
         history_color = texture_sample_bicubic_catmull_rom(history, history_linear_sampler, history_uv, texture_size).rgb;
-        //history_color = lanczos(history, history_uv, texture_size, 6);
-
         // Constrain past sample with 3x3 YCoCg variance clipping (reduces ghosting)
         // YCoCg: https://advances.realtimerendering.com/s2014/index.html#_HIGH-QUALITY_TEMPORAL_SUPERSAMPLING, slide 33
         // Variance clipping: https://developer.download.nvidia.com/gameworks/events/GDC2016/msalvi_temporal_supersampling.pdf
-        let s_tl = sample_view_target(uv + vec2(-texel_size.x,  texel_size.y), texture_size);
-        let s_tm = sample_view_target(uv + vec2( 0.0,           texel_size.y), texture_size);
-        let s_tr = sample_view_target(uv + vec2( texel_size.x,  texel_size.y), texture_size);
-        let s_ml = sample_view_target(uv + vec2(-texel_size.x,  0.0), texture_size);
-        let s_mm = RGB_to_YCoCg(current_color);
-        let s_mr = sample_view_target(uv + vec2( texel_size.x,  0.0), texture_size);
-        let s_bl = sample_view_target(uv + vec2(-texel_size.x, -texel_size.y), texture_size);
-        let s_bm = sample_view_target(uv + vec2( 0.0,          -texel_size.y), texture_size);
-        let s_br = sample_view_target(uv + vec2( texel_size.x, -texel_size.y), texture_size);
-        let moment_1 = s_tl + s_tm + s_tr + s_ml + s_mm + s_mr + s_bl + s_bm + s_br;
-        let moment_2 = (s_tl * s_tl) + (s_tm * s_tm) + (s_tr * s_tr) + (s_ml * s_ml) + (s_mm * s_mm) + (s_mr * s_mr) + (s_bl * s_bl) + (s_bm * s_bm) + (s_br * s_br);
+
+#ifdef VARIANCE_CLIPPING
+        var moment_1 = vec3(0.0);
+        var moment_2 = vec3(0.0);
+        for (var x = -1.0; x <= 1.0; x += 1.0) {
+            for (var y = -1.0; y <= 1.0; y += 1.0) {
+                let sample_uv = uv + (vec2(x, y) * texel_size);
+                let sample = sample_view_target(sample_uv, texture_size);
+                moment_1 += sample;
+                moment_2 += sample * sample;
+            }
+        }
         let mean = moment_1 / 9.0;
         let variance = (moment_2 / 9.0) - (mean * mean);
         let std_deviation = sqrt(max(variance, vec3(0.0)));
         history_color = RGB_to_YCoCg(history_color);
-        history_color = clip_towards_aabb_center(history_color, s_mm, mean - std_deviation, mean + std_deviation);
+        history_color = clip_towards_aabb_center(history_color, RGB_to_YCoCg(current_color), mean - std_deviation, mean + std_deviation);
         history_color = YCoCg_to_RGB(history_color);
+#else ifdef CLAMPING
+        var min_color = vec3(99999.0);
+        var max_color = vec3(-99999.0);
+        for (var x = -1.0; x <= 1.0; x += 1.0) {
+            for (var y = -1.0; y <= 1.0; y += 1.0) {
+                let sample_uv = uv + (vec2(x, y) * texel_size);
+                let sample = sample_view_target(sample_uv, texture_size);
+                min_color = min(sample, min_color);
+                max_color = max(sample, max_color);
+            }
+        }
+        history_color = YCoCg_to_RGB(clamp(RGB_to_YCoCg(history_color), min_color, max_color));
+#endif
 
         let pixel_motion_vector = abs(closest_motion_vector) * texture_size;
         if pixel_motion_vector.x < 0.01 && pixel_motion_vector.y < 0.01 {
@@ -280,10 +294,13 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     current_color_factor = select(current_color_factor, 1.0, reprojection_fail);
     current_color = mix(history_color, current_color, current_color_factor);
 
+#ifdef VELOCITY_REJECTION
     // See Velocity Rejection: https://www.elopezr.com/temporal-aa-and-the-quest-for-the-holy-trail/
     let motion_distance = distance(previous_motion_vector, closest_motion_vector);
-    let motion_disocclusion = saturate((motion_distance - 0.001) * 120.0); //The 120.0 was just hand tuned, needs further testing.
-    current_color = mix(current_color, center_color, motion_disocclusion);
+    let motion_disocclusion = saturate((motion_distance - 0.001) * prams.velocity_rejection);
+    current_color = mix(current_color, filtered_color, motion_disocclusion);
+#endif //VELOCITY_REJECTION
+
 #endif // #ifndef RESET
 
 
