@@ -4,11 +4,17 @@
 // http://leiy.cc/publications/TAA/TAA_EG2020_Talk.pdf
 // https://advances.realtimerendering.com/s2014/index.html#_HIGH-QUALITY_TEMPORAL_SUPERSAMPLING
 
+#import bevy_pbr::utils PI
+const PI_SQ: f32 = 9.8696044010893586188344910;
+
 // Controls how much to blend between the current and past samples
 // Lower numbers = less of the current sample and more of the past sample = more smoothing
-// Values chosen empirically
-const DEFAULT_HISTORY_BLEND_RATE: f32 = 0.2; // Default blend rate to use when no confidence in history
-const MIN_HISTORY_BLEND_RATE: f32 = 0.1; // Minimum blend rate allowed, to ensure at least some of the current sample is used
+struct TAAParameters {
+    default_history_blend_rate: f32, // Default blend rate to use when no confidence in history
+    min_history_blend_rate: f32, // Minimum blend rate allowed, to ensure at least some of the current sample is used
+    future1: f32,
+    future2: f32,
+};
 
 #import bevy_core_pipeline::fullscreen_vertex_shader  FullscreenVertexOutput
 
@@ -19,6 +25,7 @@ const MIN_HISTORY_BLEND_RATE: f32 = 0.1; // Minimum blend rate allowed, to ensur
 @group(0) @binding(4) var motion_history: texture_2d<f32>;
 @group(0) @binding(5) var motion_vectors: texture_2d<f32>;
 @group(0) @binding(6) var depth: texture_depth_2d;
+@group(0) @binding(7) var<uniform> prams: TAAParameters;
 
 struct Output {
     @location(0) view_target: vec4<f32>,
@@ -26,7 +33,7 @@ struct Output {
     @location(2) motion_history: vec4<f32>,
 };
 
-fn cubic(v: f32) -> vec4<f32> {
+fn cubic_b(v: f32) -> vec4<f32> {
     let n = vec4(1.0, 2.0, 3.0, 4.0) - v;
     let s = n * n * n;
     let x = s.x;
@@ -36,16 +43,14 @@ fn cubic(v: f32) -> vec4<f32> {
     return vec4(x, y, z, w) * (1.0/6.0);
 }
 
-fn texture_sample_bicubic(tex: texture_2d<f32>, tex_sampler: sampler, uv: vec2<f32>) -> vec4<f32> {
-    let texture_size = vec2<f32>(textureDimensions(tex).xy);
-   
+fn texture_sample_bicubic_b(tex: texture_2d<f32>, tex_sampler: sampler, uv: vec2<f32>, texture_size: vec2<f32>) -> vec4<f32> {
     var coords = uv * texture_size - 0.5;
 
     let fxy = fract(coords);
     coords = coords - fxy;
 
-    let xcubic = cubic(fxy.x);
-    let ycubic = cubic(fxy.y);
+    let xcubic = cubic_b(fxy.x);
+    let ycubic = cubic_b(fxy.y);
 
     let c = coords.xxyy + vec2(-0.5, 1.5).xyxy;
     
@@ -63,6 +68,55 @@ fn texture_sample_bicubic(tex: texture_2d<f32>, tex_sampler: sampler, uv: vec2<f
     let sy = s.z / (s.z + s.w);
 
     return mix(mix(sample3, sample2, vec4(sx)), mix(sample1, sample0, vec4(sx)), vec4(sy));
+}
+
+fn sinc(x: f32) -> f32 {
+    return select(sin(PI * x) / (PI * x), 1.0, abs(x) < 0.001);
+}
+
+// 5-sample Catmull-Rom filtering
+// Catmull-Rom filtering: https://gist.github.com/TheRealMJP/c83b8c0f46b63f3a88a5986f4fa982b1
+// Ignoring corners: https://www.activision.com/cdn/research/Dynamic_Temporal_Antialiasing_and_Upsampling_in_Call_of_Duty_v4.pdf#page=68
+// Technically we should renormalize the weights since we're skipping the corners, but it's basically the same result
+fn texture_sample_bicubic_catmull_rom(tex: texture_2d<f32>, tex_sampler: sampler, uv: vec2<f32>, texture_size: vec2<f32>) -> vec4<f32> {
+    let texel_size = 1.0 / texture_size;
+    let sample_position = uv * texture_size;
+    let tex_pos1 = floor(sample_position - 0.5) + 0.5;
+    let f = sample_position - tex_pos1;
+
+    let w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    let w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    let w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    let w3 = f * f * (-0.5 + 0.5 * f);
+
+    // Work out weighting factors and sampling offsets that will let us use bilinear filtering to
+    // simultaneously evaluate the middle 2 samples from the 4x4 grid.
+    var w12 = w1 + w2;
+    var offset12 = w2 / (w1 + w2);
+
+    // Compute the final UV coordinates we'll use for sampling the texture
+    var tex_pos0 = tex_pos1 - 1.0;
+    var tex_pos3 = tex_pos1 + 2.0;
+    var tex_pos12 = tex_pos1 + offset12;
+
+    tex_pos0 /= texture_size;
+    tex_pos3 /= texture_size;
+    tex_pos12 /= texture_size;
+
+    var result = vec4(0.0);
+    //result += textureSampleLevel(tex, tex_sampler, vec2(tex_pos0.x, tex_pos0.y), 0.0) * w0.x * w0.y;
+    result += textureSampleLevel(tex, tex_sampler, vec2(tex_pos12.x, tex_pos0.y), 0.0) * w12.x * w0.y;
+    //result += textureSampleLevel(tex, tex_sampler, vec2(tex_pos3.x, tex_pos0.y), 0.0) * w3.x * w0.y;
+
+    result += textureSampleLevel(tex, tex_sampler, vec2(tex_pos0.x, tex_pos12.y), 0.0) * w0.x * w12.y;
+    result += textureSampleLevel(tex, tex_sampler, vec2(tex_pos12.x, tex_pos12.y), 0.0) * w12.x * w12.y;
+    result += textureSampleLevel(tex, tex_sampler, vec2(tex_pos3.x, tex_pos12.y), 0.0) * w3.x * w12.y;
+
+    //result += textureSampleLevel(tex, tex_sampler, vec2(tex_pos0.x, tex_pos3.y), 0.0) * w0.x * w3.y;
+    result += textureSampleLevel(tex, tex_sampler, vec2(tex_pos12.x, tex_pos3.y), 0.0) * w12.x * w3.y;
+    //result += textureSampleLevel(tex, tex_sampler, vec2(tex_pos3.x, tex_pos3.y), 0.0) * w3.x * w3.y;
+
+    return result;
 }
 
 // TAA is ideally applied after tonemapping, but before post processing
@@ -154,19 +208,13 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     let closest_motion_vector = get_closest_motion_vector(uv, texture_size);
 
     // How confident we are that the history is representative of the current frame
-    var history_confidence = textureLoad(history, vec2<i32>(uv * texture_size), 1).a;
+    var history_confidence = textureLoad(history, vec2<i32>(uv * texture_size), 0).a;
     var history_color = vec3(0.0);
 
     // Reproject to find the equivalent sample from the past
-    // Uses 5-sample Catmull-Rom filtering (reduces blurriness)
-    // Catmull-Rom filtering: https://gist.github.com/TheRealMJP/c83b8c0f46b63f3a88a5986f4fa982b1
-    // Ignoring corners: https://www.activision.com/cdn/research/Dynamic_Temporal_Antialiasing_and_Upsampling_in_Call_of_Duty_v4.pdf#page=68
-    // Technically we should renormalize the weights since we're skipping the corners, but it's basically the same result
     let history_uv = uv - closest_motion_vector;
-    let sample_position = history_uv * texture_size;
-    let texel_center = floor(sample_position - 0.5) + 0.5;
 
-    var center_color_bicubic = texture_sample_bicubic(view_target, view_linear_sampler, uv).rgb;
+    var center_color_bicubic = texture_sample_bicubic_b(view_target, view_linear_sampler, uv, texture_size).rgb;
 #ifdef TONEMAP
         center_color_bicubic = tonemap(center_color_bicubic);
 #endif
@@ -174,28 +222,14 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     var reprojection_fail = false;
     // Fall back to bicubic if the reprojected uv is off screen 
     if reprojection_fail ||
-       texel_center.x < -0.5 || 
-       texel_center.y < -0.5 || 
-       texel_center.x > texture_size.x + 0.5 || 
-       texel_center.y > texture_size.y + 0.5 {
+        all(history_uv <= 0.0) ||
+        all(history_uv >= 1.0) {
         current_color = center_color_bicubic;
         history_confidence = 1.0;
         reprojection_fail = true;
     } else {
-        let f = sample_position - texel_center;
-        let w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
-        let w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
-        let w2 = f * (0.5 + f * (2.0 - 1.5 * f));
-        let w3 = f * f * (-0.5 + 0.5 * f);
-        let w12 = w1 + w2;
-        let texel_position_0 = (texel_center - 1.0) * texel_size;
-        let texel_position_3 = (texel_center + 2.0) * texel_size;
-        let texel_position_12 = (texel_center + (w2 / w12)) * texel_size;
-        history_color = sample_history(texel_position_12.x, texel_position_0.y) * w12.x * w0.y;
-        history_color += sample_history(texel_position_0.x, texel_position_12.y) * w0.x * w12.y;
-        history_color += sample_history(texel_position_12.x, texel_position_12.y) * w12.x * w12.y;
-        history_color += sample_history(texel_position_3.x, texel_position_12.y) * w3.x * w12.y;
-        history_color += sample_history(texel_position_12.x, texel_position_3.y) * w12.x * w3.y;
+        history_color = texture_sample_bicubic_catmull_rom(history, history_linear_sampler, history_uv, texture_size).rgb;
+        //history_color = lanczos(history, history_uv, texture_size, 6).rgb;
 
         // Constrain past sample with 3x3 YCoCg variance clipping (reduces ghosting)
         // YCoCg: https://advances.realtimerendering.com/s2014/index.html#_HIGH-QUALITY_TEMPORAL_SUPERSAMPLING, slide 33
@@ -231,7 +265,7 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
     // Blend current and past sample
     // Use more of the history if we're confident in it (reduces noise when there is no motion)
     // https://hhoppe.com/supersample.pdf, section 4.1
-    var current_color_factor = clamp(1.0 / history_confidence, MIN_HISTORY_BLEND_RATE, DEFAULT_HISTORY_BLEND_RATE);
+    var current_color_factor = clamp(1.0 / history_confidence, prams.min_history_blend_rate, prams.default_history_blend_rate);
     current_color_factor = select(current_color_factor, 1.0, reprojection_fail);
     current_color = mix(history_color, current_color, current_color_factor);
 
@@ -245,13 +279,21 @@ fn taa(@location(0) uv: vec2<f32>) -> Output {
 
     // Write output to history and view target
     var out: Output;
+
 #ifdef RESET
-    let history_confidence = 1.0 / MIN_HISTORY_BLEND_RATE;
-#endif
+    let history_confidence = 1.0 / prams.min_history_blend_rate;
+#endif // RESET
+
+#ifdef SAMPLE2
+    out.history = vec4(original_color.rgb, history_confidence);
+#else
     out.history = vec4(current_color, history_confidence);
+#endif // SAMPLE2
+
 #ifdef TONEMAP
     current_color = reverse_tonemap(current_color);
-#endif
+#endif // TONEMAP
+
     out.view_target = vec4(current_color, original_color.a);
     out.motion_history = textureLoad(motion_vectors, vec2<i32>(uv * texture_size), 0);
     return out;

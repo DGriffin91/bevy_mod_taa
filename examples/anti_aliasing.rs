@@ -31,7 +31,7 @@ use bevy::{
     window::{PrimaryWindow, WindowResized},
 };
 
-use bevy_mod_taa::{TemporalAntiAliasBundle, TemporalAntiAliasPlugin, TemporalAntiAliasSettings};
+use bevy_mod_taa::{TAABundle, TAAPlugin, TAASettings};
 
 use image::imageops::FilterType;
 
@@ -49,7 +49,7 @@ fn main() {
     }
     app.insert_resource(Msaa::Off)
         .insert_resource(movement_settings)
-        .add_plugins((DefaultPlugins, TemporalAntiAliasPlugin))
+        .add_plugins((DefaultPlugins, TAAPlugin))
         .add_systems(Startup, setup_scene)
         .add_systems(
             Update,
@@ -92,14 +92,7 @@ struct CameraMovementSettings {
 
 fn modify_aa(
     keys: Res<Input<KeyCode>>,
-    mut camera: Query<
-        (
-            Entity,
-            Option<&mut Fxaa>,
-            Option<&TemporalAntiAliasSettings>,
-        ),
-        With<Camera>,
-    >,
+    mut camera: Query<(Entity, Option<&mut Fxaa>, Option<&TAASettings>), With<Camera>>,
     mut msaa: ResMut<Msaa>,
     mut commands: Commands,
     mut camera_movement_settings: ResMut<CameraMovementSettings>,
@@ -111,13 +104,13 @@ fn modify_aa(
     if keys.just_pressed(KeyCode::Key1) {
         *msaa = Msaa::Off;
         camera.remove::<Fxaa>();
-        camera.remove::<TemporalAntiAliasBundle>();
+        camera.remove::<TAABundle>();
     }
 
     // MSAA
     if keys.just_pressed(KeyCode::Key2) && *msaa == Msaa::Off {
         camera.remove::<Fxaa>();
-        camera.remove::<TemporalAntiAliasBundle>();
+        camera.remove::<TAABundle>();
 
         *msaa = Msaa::Sample4;
     }
@@ -138,7 +131,7 @@ fn modify_aa(
     // FXAA
     if keys.just_pressed(KeyCode::Key3) && fxaa.is_none() {
         *msaa = Msaa::Off;
-        camera.remove::<TemporalAntiAliasBundle>();
+        camera.remove::<TAABundle>();
 
         camera.insert(Fxaa::default());
     }
@@ -172,7 +165,10 @@ fn modify_aa(
         *msaa = Msaa::Off;
         camera.remove::<Fxaa>();
 
-        camera.insert(TemporalAntiAliasBundle::default());
+        camera.insert((
+            //FxaaPrepass::default()
+            TAABundle::sample8(),
+        ));
     }
 
     // Rotate Camera
@@ -214,7 +210,7 @@ fn update_ui(
     mut camera: Query<
         (
             Option<&Fxaa>,
-            Option<&TemporalAntiAliasSettings>,
+            Option<&TAASettings>,
             &ContrastAdaptiveSharpeningSettings,
         ),
         With<Camera>,
@@ -497,7 +493,10 @@ fn setup_scene(
         },
     ));
     if screenshot_taa.is_some() {
-        camera.insert(TemporalAntiAliasBundle::default());
+        camera.insert((
+            //FxaaPrepass::default()
+            TAABundle::sample8(),
+        ));
     }
 
     // example instructions
@@ -612,7 +611,7 @@ fn noise_debug_texture() -> Image {
             let x = (i % (TEXTURE_SIZE * 4)) as u32;
             let y = (i / (TEXTURE_SIZE * 4)) as u32;
             let urand = hash_noise(uvec2(x, y), 0);
-            *val = (urand.powf(2.2) * 255.0 + 0.5) as u8;
+            *val = (urand.powf(2.2).powf(2.2) * 255.0 + 0.5) as u8;
         }
     }
 
@@ -641,6 +640,7 @@ fn noise_debug_texture() -> Image {
 
     img.data = image_data;
     img.texture_descriptor.mip_level_count = mip_count;
+    img.texture_descriptor.format = TextureFormat::Rgba8Unorm;
     img.sampler_descriptor = ImageSampler::Descriptor(SamplerDescriptor {
         address_mode_u: AddressMode::Repeat,
         address_mode_v: AddressMode::Repeat,
