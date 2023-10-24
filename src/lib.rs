@@ -244,7 +244,7 @@ impl Default for TAASettings {
         Self {
             sequence: TAASequence::Sample8,
             variance_clipping: ColorClippingMethod::VarianceClipping,
-            velocity_rejection: Some(120.0), //The 120.0 was just hand tuned, needs further testing.
+            velocity_rejection: Some(80.0), //The 80.0 was just hand tuned, needs further testing.
             depth_rejection_px_radius: Some(200.0), //The 200.0 was just hand tuned, needs further testing.
             reset: true,
             default_history_blend_rate: 0.2,
