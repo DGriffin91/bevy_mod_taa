@@ -359,7 +359,7 @@ fn update_ui(
     if camera_movement_settings.circle_look_camera {
         ui.push_str("(L) *Look in circle*\n");
     } else {
-        ui.push_str("(L) Rotate Camera\n");
+        ui.push_str("(L) Look in circle\n");
     }
 }
 
@@ -386,9 +386,9 @@ fn rotate_camera(
     }
 
     if camera_movement_settings.circle_look_camera {
-        let speed = 5.0;
+        let speed = 11.0;
         let t = (elapsed_time * speed) % TAU;
-        let radius = 0.3;
+        let radius = 0.5;
         transform.look_at(
             vec3(t.cos() * radius, 0.2, t.sin() * radius),
             vec3(0.0, 1.0, 0.0),

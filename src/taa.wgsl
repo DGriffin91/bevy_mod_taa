@@ -63,6 +63,12 @@ fn position_history_ndc_to_world(ndc_pos: vec3<f32>) -> vec3<f32> {
     return world_pos.xyz / world_pos.w;
 }
 
+/// Convert a world space position to ndc space
+fn position_world_to_ndc(world_pos: vec3<f32>) -> vec3<f32> {
+    let ndc_pos = vb::view.unjittered_view_proj * vec4(world_pos, 1.0);
+    return ndc_pos.xyz / ndc_pos.w;
+}
+
 fn cubic_b(v: f32) -> vec4<f32> {
     let n = vec4(1.0, 2.0, 3.0, 4.0) - v;
     let s = n * n * n;
@@ -243,6 +249,8 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
 
     let closest_motion_vector_depth = get_closest_motion_vector_depth(uv, texture_size);
     let closest_motion_vector = closest_motion_vector_depth.xy;
+    let closest_depth = closest_motion_vector_depth.z;
+    let farthest_depth = closest_motion_vector_depth.w;
 
 #ifndef RESET
     // How confident we are that the history is representative of the current frame
@@ -254,6 +262,7 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
     let history_motion_vector_depth = textureLoad(motion_history, vec2<i32>(history_uv * texture_size), 0);
     let history_motion_vector = history_motion_vector_depth.xy;
     let history_depth = history_motion_vector_depth.z;
+    let history_closest_depth = history_motion_vector_depth.w;
 #ifdef SAMPLE2
     // Softens just slightly, but much less than bicubic_b
     var filtered_color = textureSampleLevel(view_target, view_linear_sampler, uv + vec2(-0.15, -0.15) * texel_size, 0.0).rgb * 0.25;
@@ -332,15 +341,25 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
 
 #ifdef VELOCITY_REJECTION
     // See Velocity Rejection: https://www.elopezr.com/temporal-aa-and-the-quest-for-the-holy-trail/
-    let motion_distance = distance(history_motion_vector, closest_motion_vector);
+    center_depth = textureLoad(depth, vec2<i32>(uv * texture_size), 0);
+
+    // Camera movment motion vector
+    let ndc1 = vec3(uv_to_ndc(uv), closest_depth);
+    let ndc2 = vec3(uv_to_ndc(uv), history_closest_depth);
+    let a = position_world_to_ndc(position_ndc_to_world(ndc1)).xy;
+    let b = position_world_to_ndc(position_history_ndc_to_world(ndc2)).xy;
+    let cam_movment = (b - a) * vec2(0.5, -0.5);
+
+    // Cancel out camera movment when checking motion vector distance
+    let motion_distance_vs_hist = distance(history_motion_vector, closest_motion_vector);
+    let motion_distance_vs_cam = distance(closest_motion_vector, cam_movment);
+    let motion_distance = motion_distance_vs_hist * motion_distance_vs_cam * 100.0;
     let motion_disocclusion = saturate((motion_distance - 0.001) * taa.velocity_rejection);
     current_color = mix(current_color, filtered_color, motion_disocclusion);
 #endif //VELOCITY_REJECTION
 
 #ifdef DEPTH_REJECTION
 #ifndef WEBGL2
-    let closest_depth = closest_motion_vector_depth.z;
-    let farthest_depth = closest_motion_vector_depth.w;
     center_depth = textureLoad(depth, vec2<i32>(uv * texture_size), 0);
 
     let closest_pixel_radius = world_space_pixel_radius(closest_depth);
@@ -385,6 +404,6 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
 #endif // TONEMAP
 
     out.view_target = vec4(current_color, original_color.a);
-    out.motion_history = vec4(textureLoad(motion_vectors, vec2<i32>(uv * texture_size), 0).xy, center_depth, 0.0);
+    out.motion_history = vec4(closest_motion_vector, center_depth, closest_depth);
     return out;
 }
