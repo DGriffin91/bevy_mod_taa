@@ -25,13 +25,13 @@ use bevy::render::{
     prelude::{Camera, Projection},
     render_graph::{NodeRunError, RenderGraphApp, RenderGraphContext, ViewNode, ViewNodeRunner},
     render_resource::{
-        BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
-        BindGroupLayoutEntry, BindingResource, BindingType, CachedRenderPipelineId,
-        ColorTargetState, ColorWrites, Extent3d, FilterMode, FragmentState, MultisampleState,
-        Operations, PipelineCache, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
-        RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor, Shader,
-        ShaderStages, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureDescriptor,
-        TextureDimension, TextureFormat, TextureSampleType, TextureUsages, TextureViewDimension,
+        BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
+        BindingResource, BindingType, CachedRenderPipelineId, ColorTargetState, ColorWrites,
+        Extent3d, FilterMode, FragmentState, MultisampleState, Operations, PipelineCache,
+        PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor,
+        Sampler, SamplerBindingType, SamplerDescriptor, Shader, ShaderStages,
+        SpecializedRenderPipeline, SpecializedRenderPipelines, TextureDescriptor, TextureDimension,
+        TextureFormat, TextureSampleType, TextureUsages, TextureViewDimension,
     },
     renderer::{RenderContext, RenderDevice},
     texture::{BevyDefault, CachedTexture, TextureCache},
@@ -307,65 +307,58 @@ impl ViewNode for TAANode {
         let globals_buffer = world.resource::<GlobalsBuffer>();
         let globals_binding = globals_buffer.buffer.binding().unwrap();
 
-        let taa_bind_group =
-            render_context
-                .render_device()
-                .create_bind_group(&BindGroupDescriptor {
-                    label: Some("taa_bind_group"),
-                    layout: &pipelines.taa_bind_group_layout,
-                    entries: &[
-                        // View
-                        BindGroupEntry {
-                            binding: 0,
-                            resource: view_uniforms.clone(),
-                        },
-                        // Globals
-                        BindGroupEntry {
-                            binding: 9,
-                            resource: globals_binding.clone(),
-                        },
-                        BindGroupEntry {
-                            binding: 20,
-                            resource: BindingResource::TextureView(view_target.source),
-                        },
-                        BindGroupEntry {
-                            binding: 21,
-                            resource: BindingResource::Sampler(&pipelines.linear_samplers[0]),
-                        },
-                        BindGroupEntry {
-                            binding: 22,
-                            resource: BindingResource::TextureView(
-                                &taa_history_textures.read.default_view,
-                            ),
-                        },
-                        BindGroupEntry {
-                            binding: 23,
-                            resource: BindingResource::Sampler(&pipelines.linear_samplers[1]),
-                        },
-                        BindGroupEntry {
-                            binding: 24,
-                            resource: BindingResource::TextureView(
-                                &taa_history_textures.motion_read.default_view,
-                            ),
-                        },
-                        BindGroupEntry {
-                            binding: 25,
-                            resource: BindingResource::TextureView(
-                                &prepass_motion_vectors_texture.default_view,
-                            ),
-                        },
-                        BindGroupEntry {
-                            binding: 26,
-                            resource: BindingResource::TextureView(
-                                &prepass_depth_texture.default_view,
-                            ),
-                        },
-                        BindGroupEntry {
-                            binding: 27,
-                            resource: uniforms,
-                        },
-                    ],
-                });
+        let taa_bind_group = render_context.render_device().create_bind_group(
+            Some("taa_bind_group"),
+            &pipelines.taa_bind_group_layout,
+            &[
+                // View
+                BindGroupEntry {
+                    binding: 0,
+                    resource: view_uniforms.clone(),
+                },
+                // Globals
+                BindGroupEntry {
+                    binding: 9,
+                    resource: globals_binding.clone(),
+                },
+                BindGroupEntry {
+                    binding: 20,
+                    resource: BindingResource::TextureView(view_target.source),
+                },
+                BindGroupEntry {
+                    binding: 21,
+                    resource: BindingResource::Sampler(&pipelines.linear_samplers[0]),
+                },
+                BindGroupEntry {
+                    binding: 22,
+                    resource: BindingResource::TextureView(&taa_history_textures.read.default_view),
+                },
+                BindGroupEntry {
+                    binding: 23,
+                    resource: BindingResource::Sampler(&pipelines.linear_samplers[1]),
+                },
+                BindGroupEntry {
+                    binding: 24,
+                    resource: BindingResource::TextureView(
+                        &taa_history_textures.motion_read.default_view,
+                    ),
+                },
+                BindGroupEntry {
+                    binding: 25,
+                    resource: BindingResource::TextureView(
+                        &prepass_motion_vectors_texture.default_view,
+                    ),
+                },
+                BindGroupEntry {
+                    binding: 26,
+                    resource: BindingResource::TextureView(&prepass_depth_texture.default_view),
+                },
+                BindGroupEntry {
+                    binding: 27,
+                    resource: uniforms,
+                },
+            ],
+        );
 
         {
             let mut taa_pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {

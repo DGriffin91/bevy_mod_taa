@@ -4,8 +4,8 @@
 // http://leiy.cc/publications/TAA/TAA_EG2020_Talk.pdf
 // https://advances.realtimerendering.com/s2014/index.html#_HIGH-QUALITY_TEMPORAL_SUPERSAMPLING
 
-#import bevy_pbr::mesh_view_bindings view, globals
-#import bevy_pbr::utils PI
+#import bevy_pbr::mesh_view_bindings::{view, globals}
+#import bevy_pbr::utils::PI
 #import bevy_pbr::mesh_view_bindings as vb
 
 const PI_SQ: f32 = 9.8696044010893586188344910;
@@ -21,7 +21,7 @@ struct TAAUniform {
     depth_rejection_px_radius: f32,
 };
 
-#import bevy_core_pipeline::fullscreen_vertex_shader  FullscreenVertexOutput
+#import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 
 @group(0) @binding(20) var view_target: texture_2d<f32>;
 @group(0) @binding(21) var view_linear_sampler: sampler;

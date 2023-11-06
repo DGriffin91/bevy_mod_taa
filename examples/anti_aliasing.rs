@@ -524,7 +524,7 @@ fn setup_scene(
     if screenshot_taa.is_some() {
         camera.insert((
             //FxaaPrepass::default()
-            TAABundle::sample8(),
+            TAABundle::sample2(),
         ));
     }
 
@@ -603,7 +603,7 @@ fn uv_debug_texture() -> Image {
         &texture_data,
         TextureFormat::Rgba8UnormSrgb,
     );
-    img.sampler_descriptor = ImageSampler::Descriptor(SamplerDescriptor::default());
+    img.sampler = ImageSampler::Descriptor(SamplerDescriptor::default().into());
     img
 }
 
@@ -670,16 +670,19 @@ fn noise_debug_texture() -> Image {
     img.data = image_data;
     img.texture_descriptor.mip_level_count = mip_count;
     img.texture_descriptor.format = TextureFormat::Rgba8Unorm;
-    img.sampler_descriptor = ImageSampler::Descriptor(SamplerDescriptor {
-        address_mode_u: AddressMode::Repeat,
-        address_mode_v: AddressMode::Repeat,
-        address_mode_w: AddressMode::Repeat,
-        mag_filter: FilterMode::Linear,
-        min_filter: FilterMode::Linear,
-        mipmap_filter: FilterMode::Linear,
-        anisotropy_clamp: 16,
-        ..default()
-    });
+    img.sampler = ImageSampler::Descriptor(
+        SamplerDescriptor {
+            address_mode_u: AddressMode::Repeat,
+            address_mode_v: AddressMode::Repeat,
+            address_mode_w: AddressMode::Repeat,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            mipmap_filter: FilterMode::Linear,
+            anisotropy_clamp: 16,
+            ..default()
+        }
+        .into(),
+    );
     img
 }
 
@@ -695,18 +698,21 @@ fn set_sampler(
                 let Some(img) = images.get_mut(*id) else {
                     continue;
                 };
-                match &mut img.sampler_descriptor {
+                match &mut img.sampler {
                     ImageSampler::Default => {
-                        img.sampler_descriptor = ImageSampler::Descriptor(SamplerDescriptor {
-                            address_mode_u: AddressMode::Repeat,
-                            address_mode_v: AddressMode::Repeat,
-                            address_mode_w: AddressMode::Repeat,
-                            mag_filter: FilterMode::Linear,
-                            min_filter: FilterMode::Linear,
-                            mipmap_filter: FilterMode::Linear,
-                            anisotropy_clamp: 16,
-                            ..default()
-                        });
+                        img.sampler = ImageSampler::Descriptor(
+                            SamplerDescriptor {
+                                address_mode_u: AddressMode::Repeat,
+                                address_mode_v: AddressMode::Repeat,
+                                address_mode_w: AddressMode::Repeat,
+                                mag_filter: FilterMode::Linear,
+                                min_filter: FilterMode::Linear,
+                                mipmap_filter: FilterMode::Linear,
+                                anisotropy_clamp: 16,
+                                ..default()
+                            }
+                            .into(),
+                        );
                     }
                     ImageSampler::Descriptor(_) => continue,
                 }

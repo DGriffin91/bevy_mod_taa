@@ -1,11 +1,20 @@
 # Temporal Anti Aliasing for Bevy
 
-In its current state, `bevy_mod_taa` somewhat closely resembles bevy's builtin experimental TAA. It addresses a few issues related to smearing over disoccluded areas, and also favors sharper blending overall. In the future this plugin will significantly diverge from bevy's builtin TAA in order to better handle a much larger variety of scenes.
+WIP
 
-Currently depends on the bevy main branch. After the 0.12 release this `bevy_mod_taa` will depend on bevy 0.12
+Depends on bevy 0.12
 
-![example_with](demo.png)
+`bevy_mod_taa` addresses a few issues related to smearing over disoccluded areas, and also favors sharper blending overall. 
+
+It also has a mode `TAABundle::sample2()` that somewhat resembles the [TAA method used in Horizon Zero Dawn](https://advances.realtimerendering.com/s2017/DecimaSiggraph2017.pdf) (P. 29) that only uses the previous frame to minimize ghosting/smearing artifacts.
+
+Example screenshots under heavy motion:
+
+![example](demo.png)
 *bevy_mod_taa*
 
-![bevy main](bevy_main.png)
-*bevy main*
+![bevy 0.12](bevy.png)
+*bevy 0.12*
+
+![example sample 2](demo_sample2.png)
+*bevy_mod_taa sample2*
