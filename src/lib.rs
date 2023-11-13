@@ -43,6 +43,7 @@ use bevy::render::{
 use disocclusion::{DisocclusionSettings, DisocclusionTextures};
 use fxaa::FxaaPrepass;
 
+use crate::disocclusion::DisocclusionPlugin;
 use crate::fxaa::FxaaNode;
 
 pub mod disocclusion;
@@ -66,10 +67,14 @@ impl Plugin for TAAPlugin {
     fn build(&self, app: &mut App) {
         load_internal_asset!(app, TAA_SHADER_HANDLE, "taa.wgsl", Shader::from_wgsl);
 
-        app.add_plugins((fxaa::FxaaPrepassPlugin, disocclusion::DisocclusionPlugin))
+        app.add_plugins(fxaa::FxaaPrepassPlugin)
             .insert_resource(Msaa::Off)
             .register_type::<TAASettings>()
             .add_plugins(UniformComponentPlugin::<TAAUniforms>::default());
+
+        if !app.is_plugin_added::<DisocclusionPlugin>() {
+            app.add_plugins(disocclusion::DisocclusionPlugin);
+        }
 
         let Ok(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
