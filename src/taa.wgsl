@@ -31,6 +31,7 @@ struct TAAUniform {
 @group(0) @binding(25) var motion_vectors: texture_2d<f32>;
 @group(0) @binding(26) var depth: texture_depth_2d;
 @group(0) @binding(27) var<uniform> taa: TAAUniform;
+@group(0) @binding(28) var disocclusion_texture: texture_2d<f32>;
 
 struct Output {
     @location(0) view_target: vec4<f32>,
@@ -387,8 +388,10 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
     disocclusion *= 1.0 - factor;
 #endif //#ifndef WEBGL2
 #endif //DEPTH_REJECTION
-
-    current_color = mix(filtered_color, current_color, disocclusion);
+    let d = textureLoad(disocclusion_texture, ifrag_coord, 0);
+    let two_of_three = min(min(max(d.x, d.y), max(d.y, d.z)), max(d.x, d.z));
+    current_color = mix(current_color, filtered_color, saturate(two_of_three * 3.0));
+    //current_color = mix(filtered_color, current_color, disocclusion);
 #endif // #ifndef RESET
 
 
@@ -410,6 +413,7 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
 #endif // TONEMAP
 
     out.view_target = vec4(current_color, original_color.a);
+    //out.view_target = vec4(vec3(two_of_three), 1.0);
     out.motion_history = vec4(closest_motion_vector, center_depth, closest_depth);
     return out;
 }

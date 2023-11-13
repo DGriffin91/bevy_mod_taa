@@ -3,7 +3,9 @@ use bevy::asset::{load_internal_asset, Handle};
 use bevy::core::FrameCount;
 use bevy::core_pipeline::core_3d::{self, CORE_3D};
 use bevy::core_pipeline::fullscreen_vertex_shader::fullscreen_shader_vertex_state;
-use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass, ViewPrepassTextures};
+use bevy::core_pipeline::prepass::{
+    DepthPrepass, MotionVectorPrepass, NormalPrepass, ViewPrepassTextures,
+};
 use bevy::ecs::{
     prelude::{Bundle, Component, Entity},
     query::{QueryItem, With},
@@ -38,10 +40,12 @@ use bevy::render::{
     view::{ExtractedView, Msaa, ViewTarget},
     ExtractSchedule, MainWorld, Render, RenderApp, RenderSet,
 };
+use disocclusion::{DisocclusionSettings, DisocclusionTextures};
 use fxaa::FxaaPrepass;
 
 use crate::fxaa::FxaaNode;
 
+pub mod disocclusion;
 pub mod fxaa;
 
 mod draw_3d_graph {
@@ -62,7 +66,7 @@ impl Plugin for TAAPlugin {
     fn build(&self, app: &mut App) {
         load_internal_asset!(app, TAA_SHADER_HANDLE, "taa.wgsl", Shader::from_wgsl);
 
-        app.add_plugins(fxaa::FxaaPrepassPlugin)
+        app.add_plugins((fxaa::FxaaPrepassPlugin, disocclusion::DisocclusionPlugin))
             .insert_resource(Msaa::Off)
             .register_type::<TAASettings>()
             .add_plugins(UniformComponentPlugin::<TAAUniforms>::default());
@@ -112,7 +116,9 @@ pub struct TAABundle {
     pub settings: TAASettings,
     pub jitter: TemporalJitter,
     pub depth_prepass: DepthPrepass,
+    pub normal_prepass: NormalPrepass,
     pub motion_vector_prepass: MotionVectorPrepass,
+    pub disocclusion: DisocclusionSettings,
 }
 
 impl TAABundle {
@@ -265,6 +271,7 @@ impl ViewNode for TAANode {
         &'static ViewPrepassTextures,
         &'static TAAPipelineId,
         &'static DynamicUniformIndex<TAAUniforms>,
+        &'static DisocclusionTextures,
     );
 
     fn run(
@@ -279,6 +286,7 @@ impl ViewNode for TAANode {
             prepass_textures,
             taa_pipeline_id,
             uniform_index,
+            disocclusion_textures,
         ): QueryItem<Self::ViewQuery>,
         world: &World,
     ) -> Result<(), NodeRunError> {
@@ -321,6 +329,7 @@ impl ViewNode for TAANode {
                 (25, &prepass_motion_vectors_texture.default_view),
                 (26, &prepass_depth_texture.default_view),
                 (27, uniforms),
+                (28, &disocclusion_textures.output.default_view),
             )),
         );
 
@@ -488,6 +497,17 @@ impl FromWorld for TAAPipeline {
                             min_binding_size: Some(TAAUniforms::min_size()),
                         },
                         visibility: ShaderStages::FRAGMENT,
+                        count: None,
+                    },
+                    // Disocclusion Output
+                    BindGroupLayoutEntry {
+                        binding: 28,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: true },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
                         count: None,
                     },
                 ],

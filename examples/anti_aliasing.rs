@@ -524,7 +524,7 @@ fn setup_scene(
     if screenshot_taa.is_some() {
         camera.insert((
             //FxaaPrepass::default()
-            TAABundle::sample2(),
+            TAABundle::sample8(),
         ));
     }
 
