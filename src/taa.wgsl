@@ -27,50 +27,15 @@ struct TAAUniform {
 @group(0) @binding(21) var view_linear_sampler: sampler;
 @group(0) @binding(22) var history: texture_2d<f32>;
 @group(0) @binding(23) var history_linear_sampler: sampler;
-@group(0) @binding(24) var motion_history: texture_2d<f32>;
-@group(0) @binding(25) var motion_vectors: texture_2d<f32>;
-@group(0) @binding(26) var depth: texture_depth_2d;
-@group(0) @binding(27) var<uniform> taa: TAAUniform;
-@group(0) @binding(28) var disocclusion_texture: texture_2d<f32>;
+@group(0) @binding(24) var motion_vectors: texture_2d<f32>;
+@group(0) @binding(25) var depth: texture_depth_2d;
+@group(0) @binding(26) var<uniform> taa: TAAUniform;
+@group(0) @binding(27) var disocclusion_texture: texture_2d<f32>;
 
 struct Output {
     @location(0) view_target: vec4<f32>,
     @location(1) history: vec4<f32>,
-    @location(2) motion_history: vec4<f32>,
 };
-
-// https://github.com/NVIDIAGameWorks/RayTracingDenoiser/blob/3c881ae3075f7ca754e22177877335b82e16da5a/Shaders/Include/Common.hlsli#L124
-fn world_space_pixel_radius(ndc_view_z: f32) -> f32 {
-    let perspective_near = vb::view.projection[3][2];
-    let linear_depth = perspective_near / ndc_view_z;
-    // https://github.com/NVIDIAGameWorks/RayTracingDenoiser/blob/3c881ae3075f7ca754e22177877335b82e16da5a/Source/Sigma.cpp#L107
-    let is_orthographic = view.projection[3].w == 1.0;
-    let unproject = 1.0 / (0.5 * view.viewport.w * view.projection[1][1]);
-    return unproject * select(linear_depth, 1.0, is_orthographic);
-}
-
-/// Convert uv [0.0 .. 1.0] coordinate to ndc space xy [-1.0 .. 1.0]
-fn uv_to_ndc(uv: vec2<f32>) -> vec2<f32> {
-    return (uv - vec2(0.5)) * vec2(2.0, -2.0);
-}
-
-/// Convert a ndc space position to world space
-fn position_ndc_to_world(ndc_pos: vec3<f32>) -> vec3<f32> {
-    let world_pos = taa.inverse_view_proj * vec4(ndc_pos, 1.0);
-    return world_pos.xyz / world_pos.w;
-}
-
-/// Convert a ndc space position to world space
-fn position_history_ndc_to_world(ndc_pos: vec3<f32>) -> vec3<f32> {
-    let world_pos = taa.prev_inverse_view_proj * vec4(ndc_pos, 1.0);
-    return world_pos.xyz / world_pos.w;
-}
-
-/// Convert a world space position to ndc space
-fn position_world_to_ndc(world_pos: vec3<f32>) -> vec3<f32> {
-    let ndc_pos = vb::view.unjittered_view_proj * vec4(world_pos, 1.0);
-    return ndc_pos.xyz / ndc_pos.w;
-}
 
 fn cubic_b(v: f32) -> vec4<f32> {
     let n = vec4(1.0, 2.0, 3.0, 4.0) - v;
@@ -262,10 +227,7 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
 
     // Reproject to find the equivalent sample from the past
     let history_uv = uv - closest_motion_vector;
-    let history_motion_vector_depth = textureLoad(motion_history, vec2<i32>(history_uv * texture_size), 0);
-    let history_motion_vector = history_motion_vector_depth.xy;
-    let history_depth = history_motion_vector_depth.z;
-    let history_closest_depth = history_motion_vector_depth.w;
+
 #ifdef SAMPLE2
     // Softens just slightly, but much less than bicubic_b
     var filtered_color  = textureSampleLevel(view_target, view_linear_sampler, uv + vec2(-0.15, -0.15) * texel_size, 0.0).rgb * 0.25;
@@ -342,56 +304,9 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
     current_color_factor = select(current_color_factor, 1.0, reprojection_fail);
     current_color = mix(history_color, current_color, current_color_factor);
 
-    var disocclusion = 1.0;
-
-#ifdef VELOCITY_REJECTION
-#ifdef WEBGL2
-    // Need to tune to match
-    let motion_distance = distance(history_motion_vector, closest_motion_vector);
-#else
-    // See Velocity Rejection: https://www.elopezr.com/temporal-aa-and-the-quest-for-the-holy-trail/
-    center_depth = textureLoad(depth, vec2<i32>(uv * texture_size), 0);
-
-    // Camera movment motion vector
-    let ndc1 = vec3(uv_to_ndc(uv), closest_depth);
-    let ndc2 = vec3(uv_to_ndc(uv), history_closest_depth);
-    let a = position_world_to_ndc(position_ndc_to_world(ndc1)).xy;
-    let b = position_world_to_ndc(position_history_ndc_to_world(ndc2)).xy;
-    let cam_movment = (b - a) * vec2(0.5, -0.5);
-
-    // Cancel out camera movment when checking motion vector distance
-    let motion_distance_vs_hist = distance(history_motion_vector, closest_motion_vector);
-    let motion_distance_vs_cam = distance(closest_motion_vector, cam_movment);
-    let motion_distance = motion_distance_vs_hist * motion_distance_vs_cam * 140.0;
-#endif //WEBGL2
-    disocclusion *= 1.0 - saturate((motion_distance - 0.001) * taa.velocity_rejection);
-#endif //VELOCITY_REJECTION
-
-#ifdef DEPTH_REJECTION
-#ifndef WEBGL2
-    center_depth = textureLoad(depth, vec2<i32>(uv * texture_size), 0);
-
-    let farthest_pixel_radius = world_space_pixel_radius(farthest_depth);
-
-    let history_world_position = position_history_ndc_to_world(vec3(uv_to_ndc(history_uv), history_depth));
-    let farthest_world_position = position_ndc_to_world(vec3(uv_to_ndc(uv), farthest_depth));
-    let closest_world_position = position_ndc_to_world(vec3(uv_to_ndc(uv), closest_depth));
-
-    let pixel_radius_scaled = farthest_pixel_radius * taa.depth_rejection_px_radius;
-
-    let aabb_min = min(farthest_world_position, closest_world_position) - pixel_radius_scaled;
-    let aabb_max = max(farthest_world_position, closest_world_position) + pixel_radius_scaled;
-
-    let clamped = clamp(history_world_position, aabb_min, aabb_max);
-    let factor = saturate(distance(history_world_position, clamped) * pixel_radius_scaled) * f32((farthest_depth * history_depth) != 0.0);
-
-    disocclusion *= 1.0 - factor;
-#endif //#ifndef WEBGL2
-#endif //DEPTH_REJECTION
     let d = textureLoad(disocclusion_texture, ifrag_coord, 0);
     let two_of_three = min(min(max(d.x, d.y), max(d.y, d.z)), max(d.x, d.z));
     current_color = mix(current_color, filtered_color, saturate(two_of_three * 3.0));
-    //current_color = mix(filtered_color, current_color, disocclusion);
 #endif // #ifndef RESET
 
 
@@ -413,7 +328,5 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
 #endif // TONEMAP
 
     out.view_target = vec4(current_color, original_color.a);
-    //out.view_target = vec4(vec3(two_of_three), 1.0);
-    out.motion_history = vec4(closest_motion_vector, center_depth, closest_depth);
     return out;
 }

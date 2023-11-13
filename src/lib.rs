@@ -210,8 +210,6 @@ pub struct TAAUniforms {
     prev_inverse_view_proj: Mat4,
     default_history_blend_rate: f32,
     min_history_blend_rate: f32,
-    velocity_rejection: f32,
-    depth_rejection_px_radius: f32,
 }
 /// Component to apply temporal anti-aliasing to a 3D perspective camera.
 ///
@@ -224,13 +222,6 @@ pub struct TAAUniforms {
 pub struct TAASettings {
     pub sequence: TAASequence,
     pub variance_clipping: ColorClippingMethod,
-
-    /// Higher values are more sensitive / more likely to trigger rejection.
-    pub velocity_rejection: Option<f32>,
-
-    /// Reject history depths that are outside the neighborhood range by this px radius
-    /// Lower values are more sensitive / more likely to trigger rejection.
-    pub depth_rejection_px_radius: Option<f32>,
 
     pub default_history_blend_rate: f32,
     pub min_history_blend_rate: f32,
@@ -250,8 +241,6 @@ impl Default for TAASettings {
         Self {
             sequence: TAASequence::Sample8,
             variance_clipping: ColorClippingMethod::VarianceClipping,
-            velocity_rejection: Some(80.0), //The 80.0 was just hand tuned, needs further testing.
-            depth_rejection_px_radius: Some(200.0), //The 200.0 was just hand tuned, needs further testing.
             reset: true,
             default_history_blend_rate: 0.2,
             min_history_blend_rate: 0.1,
@@ -325,11 +314,10 @@ impl ViewNode for TAANode {
                 (21, &pipelines.linear_samplers[0]),
                 (22, &taa_history_textures.read.default_view),
                 (23, &pipelines.linear_samplers[1]),
-                (24, &taa_history_textures.motion_read.default_view),
-                (25, &prepass_motion_vectors_texture.default_view),
-                (26, &prepass_depth_texture.default_view),
-                (27, uniforms),
-                (28, &disocclusion_textures.output.default_view),
+                (24, &prepass_motion_vectors_texture.default_view),
+                (25, &prepass_depth_texture.default_view),
+                (26, uniforms),
+                (27, &disocclusion_textures.output.default_view),
             )),
         );
 
@@ -344,11 +332,6 @@ impl ViewNode for TAANode {
                     }),
                     Some(RenderPassColorAttachment {
                         view: &taa_history_textures.write.default_view,
-                        resolve_target: None,
-                        ops: Operations::default(),
-                    }),
-                    Some(RenderPassColorAttachment {
-                        view: &taa_history_textures.motion_write.default_view,
                         resolve_target: None,
                         ops: Operations::default(),
                     }),
@@ -455,7 +438,7 @@ impl FromWorld for TAAPipeline {
                         ty: BindingType::Sampler(SamplerBindingType::Filtering),
                         count: None,
                     },
-                    // TAA Motion History (read)
+                    // Motion Vectors
                     BindGroupLayoutEntry {
                         binding: 24,
                         visibility: ShaderStages::FRAGMENT,
@@ -466,20 +449,9 @@ impl FromWorld for TAAPipeline {
                         },
                         count: None,
                     },
-                    // Motion Vectors
-                    BindGroupLayoutEntry {
-                        binding: 25,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: true },
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
                     // Depth
                     BindGroupLayoutEntry {
-                        binding: 26,
+                        binding: 25,
                         visibility: ShaderStages::FRAGMENT,
                         ty: BindingType::Texture {
                             sample_type: TextureSampleType::Depth,
@@ -490,7 +462,7 @@ impl FromWorld for TAAPipeline {
                     },
                     // TAA Parameters
                     BindGroupLayoutEntry {
-                        binding: 27,
+                        binding: 26,
                         ty: BindingType::Buffer {
                             ty: BufferBindingType::Uniform,
                             has_dynamic_offset: true,
@@ -501,7 +473,7 @@ impl FromWorld for TAAPipeline {
                     },
                     // Disocclusion Output
                     BindGroupLayoutEntry {
-                        binding: 28,
+                        binding: 27,
                         visibility: ShaderStages::FRAGMENT,
                         ty: BindingType::Texture {
                             sample_type: TextureSampleType::Float { filterable: true },
@@ -524,8 +496,6 @@ impl FromWorld for TAAPipeline {
 struct TAAPipelineKey {
     hdr: bool,
     reset: bool,
-    velocity_rejection: bool,
-    depth_rejection: bool,
     variance_clipping: ColorClippingMethod,
     sequence: TAASequence,
 }
@@ -545,14 +515,6 @@ impl SpecializedRenderPipeline for TAAPipeline {
 
         if key.reset {
             shader_defs.push("RESET".into());
-        }
-
-        if key.velocity_rejection {
-            shader_defs.push("VELOCITY_REJECTION".into())
-        }
-
-        if key.depth_rejection {
-            shader_defs.push("DEPTH_REJECTION".into())
         }
 
         match key.variance_clipping {
@@ -581,11 +543,6 @@ impl SpecializedRenderPipeline for TAAPipeline {
                 shader_defs,
                 entry_point: "fragment".into(),
                 targets: vec![
-                    Some(ColorTargetState {
-                        format,
-                        blend: None,
-                        write_mask: ColorWrites::ALL,
-                    }),
                     Some(ColorTargetState {
                         format,
                         blend: None,
@@ -675,10 +632,6 @@ fn extract_taa_settings(
                         prev_inverse_view_proj,
                         default_history_blend_rate: taa_settings.default_history_blend_rate,
                         min_history_blend_rate: taa_settings.min_history_blend_rate,
-                        velocity_rejection: taa_settings.velocity_rejection.unwrap_or(0.0),
-                        depth_rejection_px_radius: taa_settings
-                            .depth_rejection_px_radius
-                            .unwrap_or(0.0),
                     });
                 taa_settings.reset = false;
             }
@@ -704,8 +657,6 @@ fn prepare_taa_jitter_and_mip_bias(
 struct TAAHistoryTextures {
     write: CachedTexture,
     read: CachedTexture,
-    motion_write: CachedTexture,
-    motion_read: CachedTexture,
 }
 
 fn prepare_taa_history_textures(
@@ -736,48 +687,21 @@ fn prepare_taa_history_textures(
                 view_formats: &[],
             };
 
-            let mut motion_texture_descriptor = TextureDescriptor {
-                label: None,
-                size: Extent3d {
-                    depth_or_array_layers: 1,
-                    width: physical_viewport_size.x,
-                    height: physical_viewport_size.y,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: TextureFormat::Rgba16Float,
-                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            };
-
             texture_descriptor.label = Some("taa_history_1_texture");
             let history_1_texture = texture_cache.get(&render_device, texture_descriptor.clone());
 
             texture_descriptor.label = Some("taa_history_2_texture");
             let history_2_texture = texture_cache.get(&render_device, texture_descriptor.clone());
 
-            motion_texture_descriptor.label = Some("taa_history_1_texture");
-            let history_motion_1_texture =
-                texture_cache.get(&render_device, motion_texture_descriptor.clone());
-
-            motion_texture_descriptor.label = Some("taa_history_2_texture");
-            let history_motion_2_texture =
-                texture_cache.get(&render_device, motion_texture_descriptor);
-
             commands.entity(entity).insert(if frame_count.0 % 2 == 0 {
                 TAAHistoryTextures {
                     write: history_1_texture,
                     read: history_2_texture,
-                    motion_write: history_motion_1_texture,
-                    motion_read: history_motion_2_texture,
                 }
             } else {
                 TAAHistoryTextures {
                     write: history_2_texture,
                     read: history_1_texture,
-                    motion_write: history_motion_2_texture,
-                    motion_read: history_motion_1_texture,
                 }
             });
         }
@@ -800,8 +724,6 @@ fn prepare_taa_pipelines(
             reset: taa_settings.reset,
             variance_clipping: taa_settings.variance_clipping,
             sequence: taa_settings.sequence,
-            velocity_rejection: taa_settings.velocity_rejection.is_some(),
-            depth_rejection: taa_settings.depth_rejection_px_radius.is_some(),
         };
         let pipeline_id = pipelines.specialize(&pipeline_cache, &pipeline, pipeline_key.clone());
 

@@ -111,32 +111,30 @@ impl Plugin for DisocclusionPlugin {
 pub struct DisocclusionUniforms {
     inverse_view_proj: Mat4,
     prev_inverse_view_proj: Mat4,
-    velocity_rejection: f32,
-    depth_rejection_px_radius: f32,
-    normals_rejection_scale: f32,
+    velocity_disocclusion: f32,
+    depth_disocclusion_px_radius: f32,
+    normals_disocclusion_scale: f32,
 }
 
 #[derive(Component, Reflect, Clone, Debug)]
 pub struct DisocclusionSettings {
-    /// Higher values are more sensitive / more likely to trigger rejection.
-    pub velocity_rejection: Option<f32>,
+    /// Higher values are more sensitive / more likely to detect disocclusion.
+    pub velocity_disocclusion: Option<f32>,
 
     /// Reject history depths that are outside the neighborhood range by this px radius
-    /// Lower values are more sensitive / more likely to trigger rejection.
-    pub depth_rejection_px_radius: Option<f32>,
+    /// Lower values are more sensitive / more likely to detect disocclusion.
+    pub depth_disocclusion_px_radius: Option<f32>,
 
-    pub normals_rejection_scale: Option<f32>,
+    /// Higher values are more sensitive / more likely to detect disocclusion.
+    pub normals_disocclusion_scale: Option<f32>,
 }
 
 impl Default for DisocclusionSettings {
     fn default() -> Self {
         Self {
-            // Higher is more likely to detect disocclusion.
-            velocity_rejection: Some(40.0),
-            // Lower is more likely to detect disocclusion.
-            depth_rejection_px_radius: Some(100.0),
-            // Higher is more likely to detect disocclusion.
-            normals_rejection_scale: Some(1.0),
+            velocity_disocclusion: Some(40.0),
+            depth_disocclusion_px_radius: Some(100.0),
+            normals_disocclusion_scale: Some(1.0),
         }
     }
 }
@@ -525,12 +523,14 @@ fn extract_disocclusion_settings(
                     .insert(DisocclusionUniforms {
                         inverse_view_proj: *inverse_view_proj,
                         prev_inverse_view_proj,
-                        velocity_rejection: disocclusion_settings.velocity_rejection.unwrap_or(0.0),
-                        depth_rejection_px_radius: disocclusion_settings
-                            .depth_rejection_px_radius
+                        velocity_disocclusion: disocclusion_settings
+                            .velocity_disocclusion
                             .unwrap_or(0.0),
-                        normals_rejection_scale: disocclusion_settings
-                            .normals_rejection_scale
+                        depth_disocclusion_px_radius: disocclusion_settings
+                            .depth_disocclusion_px_radius
+                            .unwrap_or(0.0),
+                        normals_disocclusion_scale: disocclusion_settings
+                            .normals_disocclusion_scale
                             .unwrap_or(0.0),
                     });
             }
@@ -660,9 +660,9 @@ fn prepare_disocclusion_pipelines(
 ) {
     for (entity, _view, disocclusion_settings) in &views {
         let pipeline_key = DisocclusionPipelineKey {
-            velocity_rejection: disocclusion_settings.velocity_rejection.is_some(),
-            depth_rejection: disocclusion_settings.depth_rejection_px_radius.is_some(),
-            normals_rejection: disocclusion_settings.normals_rejection_scale.is_some(),
+            velocity_rejection: disocclusion_settings.velocity_disocclusion.is_some(),
+            depth_rejection: disocclusion_settings.depth_disocclusion_px_radius.is_some(),
+            normals_rejection: disocclusion_settings.normals_disocclusion_scale.is_some(),
         };
         let pipeline_id = pipelines.specialize(&pipeline_cache, &pipeline, pipeline_key.clone());
 

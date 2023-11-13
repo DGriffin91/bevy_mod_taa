@@ -12,9 +12,9 @@ const PI_SQ: f32 = 9.8696044010893586188344910;
 struct Uniform {
     inverse_view_proj: mat4x4<f32>, // not jittered
     prev_inverse_view_proj: mat4x4<f32>, // not jittered
-    velocity_rejection: f32,
-    depth_rejection_px_radius: f32,
-    normals_rejection_scale: f32,
+    velocity_disocclusion: f32,
+    depth_disocclusion_px_radius: f32,
+    normals_disocclusion_scale: f32,
 };
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
@@ -149,9 +149,9 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
 
     let normals = textureLoad(normals, vec2<i32>(uv * texture_size), 0) * 2.0 - 1.0;
 
-    var velocity_disocclusion = 1.0;
-    var depth_disocclusion = 1.0;
-    var normals_disocclusion = 1.0;
+    var velocity_disocclusion = 0.0;
+    var depth_disocclusion = 0.0;
+    var normals_disocclusion = 0.0;
 
 // VELOCITY_REJECTION
     var cam_movment = vec2(0.0);
@@ -180,7 +180,7 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
     let cam_rotate_vel = saturate(1.0 - length(cam_rotate) * 100.0);
     let motion_distance = motion_distance_vs_hist * motion_distance_vs_cam * 140.0;
 #endif //WEBGL2
-    velocity_disocclusion *= saturate((motion_distance - 0.001) * uni.velocity_rejection);
+    velocity_disocclusion = saturate((motion_distance - 0.001) * uni.velocity_disocclusion);
 #endif //VELOCITY_REJECTION
 
 #ifdef DEPTH_REJECTION
@@ -194,7 +194,7 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
     let closest_world_position = position_ndc_to_world(vec3(uv_to_ndc(uv), closest_depth));
 
 
-    let pixel_radius_scaled = farthest_pixel_radius * uni.depth_rejection_px_radius;
+    let pixel_radius_scaled = farthest_pixel_radius * uni.depth_disocclusion_px_radius;
 
     let aabb_min = min(farthest_world_position, closest_world_position) - pixel_radius_scaled;
     let aabb_max = max(farthest_world_position, closest_world_position) + pixel_radius_scaled;
@@ -202,7 +202,7 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
     let clamped = clamp(history_world_position, aabb_min, aabb_max);
     let factor = saturate(distance(history_world_position, clamped) * pixel_radius_scaled) * f32((farthest_depth * history_depth) != 0.0);
 
-    depth_disocclusion *= factor;
+    depth_disocclusion = factor;
 #endif //#ifndef WEBGL2
 #endif //DEPTH_REJECTION
 
@@ -214,7 +214,7 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
             min_nor_diff = min(min_nor_diff, 1.0 - saturate(dot(history_normals.xyz, normals.xyz) * 0.5 + 0.5));
         }
     }
-    normals_disocclusion = saturate(saturate(min_nor_diff * min_nor_diff - 0.25) * uni.normals_rejection_scale);
+    normals_disocclusion = saturate(saturate(min_nor_diff * min_nor_diff - 0.25) * uni.normals_disocclusion_scale);
 #endif //NORMALS_REJECTION
 
     // Write output to history and view target
