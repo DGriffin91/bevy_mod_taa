@@ -18,20 +18,20 @@ use bevy::render::extract_component::{
     ComponentUniforms, DynamicUniformIndex, UniformComponentPlugin,
 };
 use bevy::render::globals::{GlobalsBuffer, GlobalsUniform};
-use bevy::render::render_resource::{BufferBindingType, ShaderType};
+use bevy::render::render_resource::{BindGroupEntries, BufferBindingType, ShaderType};
 use bevy::render::view::{ViewUniform, ViewUniformOffset, ViewUniforms};
 use bevy::render::{
     camera::{ExtractedCamera, MipBias, TemporalJitter},
     prelude::{Camera, Projection},
     render_graph::{NodeRunError, RenderGraphApp, RenderGraphContext, ViewNode, ViewNodeRunner},
     render_resource::{
-        BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
-        BindingResource, BindingType, CachedRenderPipelineId, ColorTargetState, ColorWrites,
-        Extent3d, FilterMode, FragmentState, MultisampleState, Operations, PipelineCache,
-        PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor,
-        Sampler, SamplerBindingType, SamplerDescriptor, Shader, ShaderStages,
-        SpecializedRenderPipeline, SpecializedRenderPipelines, TextureDescriptor, TextureDimension,
-        TextureFormat, TextureSampleType, TextureUsages, TextureViewDimension,
+        BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType,
+        CachedRenderPipelineId, ColorTargetState, ColorWrites, Extent3d, FilterMode, FragmentState,
+        MultisampleState, Operations, PipelineCache, PrimitiveState, RenderPassColorAttachment,
+        RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType,
+        SamplerDescriptor, Shader, ShaderStages, SpecializedRenderPipeline,
+        SpecializedRenderPipelines, TextureDescriptor, TextureDimension, TextureFormat,
+        TextureSampleType, TextureUsages, TextureViewDimension,
     },
     renderer::{RenderContext, RenderDevice},
     texture::{BevyDefault, CachedTexture, TextureCache},
@@ -310,54 +310,18 @@ impl ViewNode for TAANode {
         let taa_bind_group = render_context.render_device().create_bind_group(
             Some("taa_bind_group"),
             &pipelines.taa_bind_group_layout,
-            &[
-                // View
-                BindGroupEntry {
-                    binding: 0,
-                    resource: view_uniforms.clone(),
-                },
-                // Globals
-                BindGroupEntry {
-                    binding: 9,
-                    resource: globals_binding.clone(),
-                },
-                BindGroupEntry {
-                    binding: 20,
-                    resource: BindingResource::TextureView(view_target.source),
-                },
-                BindGroupEntry {
-                    binding: 21,
-                    resource: BindingResource::Sampler(&pipelines.linear_samplers[0]),
-                },
-                BindGroupEntry {
-                    binding: 22,
-                    resource: BindingResource::TextureView(&taa_history_textures.read.default_view),
-                },
-                BindGroupEntry {
-                    binding: 23,
-                    resource: BindingResource::Sampler(&pipelines.linear_samplers[1]),
-                },
-                BindGroupEntry {
-                    binding: 24,
-                    resource: BindingResource::TextureView(
-                        &taa_history_textures.motion_read.default_view,
-                    ),
-                },
-                BindGroupEntry {
-                    binding: 25,
-                    resource: BindingResource::TextureView(
-                        &prepass_motion_vectors_texture.default_view,
-                    ),
-                },
-                BindGroupEntry {
-                    binding: 26,
-                    resource: BindingResource::TextureView(&prepass_depth_texture.default_view),
-                },
-                BindGroupEntry {
-                    binding: 27,
-                    resource: uniforms,
-                },
-            ],
+            &BindGroupEntries::with_indices((
+                (0, view_uniforms.clone()),
+                (9, globals_binding.clone()),
+                (20, view_target.source),
+                (21, &pipelines.linear_samplers[0]),
+                (22, &taa_history_textures.read.default_view),
+                (23, &pipelines.linear_samplers[1]),
+                (24, &taa_history_textures.motion_read.default_view),
+                (25, &prepass_motion_vectors_texture.default_view),
+                (26, &prepass_depth_texture.default_view),
+                (27, uniforms),
+            )),
         );
 
         {
@@ -427,7 +391,7 @@ impl FromWorld for TAAPipeline {
                     // View
                     BindGroupLayoutEntry {
                         binding: 0,
-                        visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                        visibility: ShaderStages::FRAGMENT,
                         ty: BindingType::Buffer {
                             ty: BufferBindingType::Uniform,
                             has_dynamic_offset: true,
@@ -438,7 +402,7 @@ impl FromWorld for TAAPipeline {
                     // Globals
                     BindGroupLayoutEntry {
                         binding: 9,
-                        visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                        visibility: ShaderStages::FRAGMENT,
                         ty: BindingType::Buffer {
                             ty: BufferBindingType::Uniform,
                             has_dynamic_offset: false,
