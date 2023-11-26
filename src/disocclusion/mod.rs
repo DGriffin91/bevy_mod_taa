@@ -542,9 +542,9 @@ fn extract_disocclusion_settings(
 pub struct DisocclusionTextures {
     pub output: CachedTexture,
     history_write: CachedTexture,
-    history_read: CachedTexture,
+    pub history_read: CachedTexture,
     history_normals_write: CachedTexture,
-    history_normals_read: CachedTexture,
+    pub history_normals_read: CachedTexture,
 }
 
 fn prepare_disocclusion_textures(
