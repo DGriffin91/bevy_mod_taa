@@ -143,8 +143,8 @@ impl TAABundle {
         TAABundle {
             settings: TAASettings {
                 sequence: TAASequence::Sample4,
-                default_history_blend_rate: 0.33,
-                min_history_blend_rate: 0.25,
+                default_history_blend_rate: 0.2,
+                min_history_blend_rate: 0.1,
                 ..default()
             },
             ..default()
@@ -154,8 +154,8 @@ impl TAABundle {
         TAABundle {
             settings: TAASettings {
                 sequence: TAASequence::Sample8,
-                default_history_blend_rate: 0.2,
-                min_history_blend_rate: 0.1,
+                default_history_blend_rate: 0.15,
+                min_history_blend_rate: 0.05,
                 ..default()
             },
             ..default()
