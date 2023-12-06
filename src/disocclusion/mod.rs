@@ -461,22 +461,14 @@ fn extract_disocclusion_settings(
     mut main_world: ResMut<MainWorld>,
     mut inverse_view_proj: Local<Mat4>,
 ) {
-    let mut cameras_3d = main_world.query_filtered::<(
-        Entity,
-        &Camera,
-        &GlobalTransform,
-        &Projection,
-        &mut DisocclusionSettings,
-        &TemporalJitter,
-    ), (
-        With<Camera3d>,
-        With<DepthPrepass>,
-        With<MotionVectorPrepass>,
-    )>();
+    let mut cameras_3d = main_world
+        .query_filtered::<(Entity, &Camera, &GlobalTransform, &mut DisocclusionSettings), (
+            With<Camera3d>,
+            With<DepthPrepass>,
+            With<MotionVectorPrepass>,
+        )>();
 
-    for (entity, camera, transform, camera_projection, disocclusion_settings, _temporal_jitter) in
-        cameras_3d.iter_mut(&mut main_world)
-    {
+    for (entity, camera, transform, disocclusion_settings) in cameras_3d.iter_mut(&mut main_world) {
         if let (
             Some(URect {
                 min: viewport_origin,
@@ -510,13 +502,10 @@ fn extract_disocclusion_settings(
             //        .unwrap_or_else(|| projection * inverse_view)
             //};
 
-            let has_perspective_projection =
-                matches!(camera_projection, Projection::Perspective(_));
-
             let prev_inverse_view_proj = *inverse_view_proj;
             *inverse_view_proj = view * inverse_projection;
 
-            if camera.is_active && has_perspective_projection {
+            if camera.is_active {
                 commands
                     .get_or_spawn(entity)
                     .insert(disocclusion_settings.clone())

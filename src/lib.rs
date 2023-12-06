@@ -24,7 +24,7 @@ use bevy::render::render_resource::{BindGroupEntries, BufferBindingType, ShaderT
 use bevy::render::view::{ViewUniform, ViewUniformOffset, ViewUniforms};
 use bevy::render::{
     camera::{ExtractedCamera, MipBias, TemporalJitter},
-    prelude::{Camera, Projection},
+    prelude::Camera,
     render_graph::{NodeRunError, RenderGraphApp, RenderGraphContext, ViewNode, ViewNodeRunner},
     render_resource::{
         BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType,
@@ -573,22 +573,14 @@ fn extract_taa_settings(
     mut main_world: ResMut<MainWorld>,
     mut inverse_view_proj: Local<Mat4>,
 ) {
-    let mut cameras_3d = main_world.query_filtered::<(
-        Entity,
-        &Camera,
-        &GlobalTransform,
-        &Projection,
-        &mut TAASettings,
-        &TemporalJitter,
-    ), (
-        With<Camera3d>,
-        With<DepthPrepass>,
-        With<MotionVectorPrepass>,
-    )>();
+    let mut cameras_3d = main_world
+        .query_filtered::<(Entity, &Camera, &GlobalTransform, &mut TAASettings), (
+            With<Camera3d>,
+            With<DepthPrepass>,
+            With<MotionVectorPrepass>,
+        )>();
 
-    for (entity, camera, transform, camera_projection, mut taa_settings, _temporal_jitter) in
-        cameras_3d.iter_mut(&mut main_world)
-    {
+    for (entity, camera, transform, mut taa_settings) in cameras_3d.iter_mut(&mut main_world) {
         if let (
             Some(URect {
                 min: viewport_origin,
@@ -622,13 +614,13 @@ fn extract_taa_settings(
             //        .unwrap_or_else(|| projection * inverse_view)
             //};
 
-            let has_perspective_projection =
-                matches!(camera_projection, Projection::Perspective(_));
+            //let has_perspective_projection =
+            //    matches!(camera_projection, Projection::Perspective(_));
 
             let prev_inverse_view_proj = *inverse_view_proj;
             *inverse_view_proj = view * inverse_projection;
 
-            if camera.is_active && has_perspective_projection {
+            if camera.is_active {
                 commands
                     .get_or_spawn(entity)
                     .insert(taa_settings.clone())
@@ -697,7 +689,6 @@ fn prepare_taa_history_textures(
 
             texture_descriptor.label = Some("taa_history_2_texture");
             let history_2_texture = texture_cache.get(&render_device, texture_descriptor.clone());
-
             commands.entity(entity).insert(if frame_count.0 % 2 == 0 {
                 TAAHistoryTextures {
                     write: history_1_texture,
