@@ -30,7 +30,6 @@ struct TAAUniform {
 @group(0) @binding(24) var motion_vectors: texture_2d<f32>;
 @group(0) @binding(25) var depth: texture_depth_2d;
 @group(0) @binding(26) var<uniform> taa: TAAUniform;
-@group(0) @binding(27) var disocclusion_texture: texture_2d<f32>;
 
 struct Output {
     @location(0) view_target: vec4<f32>,
@@ -303,12 +302,7 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
     var current_color_factor = clamp(1.0 / history_confidence, taa.min_history_blend_rate, taa.default_history_blend_rate);
     current_color_factor = select(current_color_factor, 1.0, reprojection_fail);
     current_color = mix(history_color, current_color, current_color_factor);
-
-    let d = textureLoad(disocclusion_texture, ifrag_coord, 0);
-    let two_of_three = min(min(max(d.x, d.y), max(d.y, d.z)), max(d.x, d.z));
-    current_color = mix(current_color, filtered_color, saturate(two_of_three * 3.0));
 #endif // #ifndef RESET
-
 
     // Write output to history and view target
     var out: Output;

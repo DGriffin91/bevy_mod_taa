@@ -40,14 +40,6 @@ use bevy::render::{
     view::{ExtractedView, Msaa, ViewTarget},
     ExtractSchedule, MainWorld, Render, RenderApp, RenderSet,
 };
-use disocclusion::{DisocclusionSettings, DisocclusionTextures};
-use fxaa::FxaaPrepass;
-
-use crate::disocclusion::DisocclusionPlugin;
-use crate::fxaa::FxaaNode;
-
-pub mod disocclusion;
-pub mod fxaa;
 
 mod draw_3d_graph {
     pub mod node {
@@ -67,14 +59,9 @@ impl Plugin for TAAPlugin {
     fn build(&self, app: &mut App) {
         load_internal_asset!(app, TAA_SHADER_HANDLE, "taa.wgsl", Shader::from_wgsl);
 
-        app.add_plugins(fxaa::FxaaPrepassPlugin)
-            .insert_resource(Msaa::Off)
+        app.insert_resource(Msaa::Off)
             .register_type::<TAASettings>()
             .add_plugins(UniformComponentPlugin::<TAAUniforms>::default());
-
-        if !app.is_plugin_added::<DisocclusionPlugin>() {
-            app.add_plugins(disocclusion::DisocclusionPlugin);
-        }
 
         let Ok(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
@@ -92,12 +79,10 @@ impl Plugin for TAAPlugin {
                 ),
             )
             .add_render_graph_node::<ViewNodeRunner<TAANode>>(CORE_3D, draw_3d_graph::node::TAA)
-            .add_render_graph_node::<ViewNodeRunner<FxaaNode>>(CORE_3D, fxaa::FXAA_PREPASS)
             .add_render_graph_edges(
                 CORE_3D,
                 &[
                     core_3d::graph::node::END_MAIN_PASS,
-                    fxaa::FXAA_PREPASS,
                     draw_3d_graph::node::TAA,
                     core_3d::graph::node::BLOOM,
                     core_3d::graph::node::TONEMAPPING,
@@ -117,19 +102,16 @@ impl Plugin for TAAPlugin {
 /// Bundle to apply temporal anti-aliasing.
 #[derive(Bundle, Default)]
 pub struct TAABundle {
-    pub fxaa_prepass: FxaaPrepass,
     pub settings: TAASettings,
     pub jitter: TemporalJitter,
     pub depth_prepass: DepthPrepass,
     pub normal_prepass: NormalPrepass,
     pub motion_vector_prepass: MotionVectorPrepass,
-    pub disocclusion: DisocclusionSettings,
 }
 
 impl TAABundle {
     pub fn sample2() -> TAABundle {
         TAABundle {
-            fxaa_prepass: FxaaPrepass::ultra_low(),
             settings: TAASettings {
                 sequence: TAASequence::Sample2,
                 default_history_blend_rate: 0.5,
@@ -265,7 +247,6 @@ impl ViewNode for TAANode {
         &'static ViewPrepassTextures,
         &'static TAAPipelineId,
         &'static DynamicUniformIndex<TAAUniforms>,
-        &'static DisocclusionTextures,
     );
 
     fn run(
@@ -280,7 +261,6 @@ impl ViewNode for TAANode {
             prepass_textures,
             taa_pipeline_id,
             uniform_index,
-            disocclusion_textures,
         ): QueryItem<Self::ViewQuery>,
         world: &World,
     ) -> Result<(), NodeRunError> {
@@ -322,7 +302,6 @@ impl ViewNode for TAANode {
                 (24, &prepass_motion_vectors_texture.default_view),
                 (25, &prepass_depth_texture.default_view),
                 (26, uniforms),
-                (27, &disocclusion_textures.output.default_view),
             )),
         );
 
@@ -474,17 +453,6 @@ impl FromWorld for TAAPipeline {
                             min_binding_size: Some(TAAUniforms::min_size()),
                         },
                         visibility: ShaderStages::FRAGMENT,
-                        count: None,
-                    },
-                    // Disocclusion Output
-                    BindGroupLayoutEntry {
-                        binding: 27,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: true },
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
                         count: None,
                     },
                 ],
