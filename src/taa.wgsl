@@ -227,15 +227,7 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
     // Reproject to find the equivalent sample from the past
     let history_uv = uv - closest_motion_vector;
 
-#ifdef SAMPLE2
-    // Softens just slightly, but much less than bicubic_b
-    var filtered_color  = textureSampleLevel(view_target, view_linear_sampler, uv + vec2(-0.15, -0.15) * texel_size, 0.0).rgb * 0.25;
-    filtered_color     += textureSampleLevel(view_target, view_linear_sampler, uv + vec2( 0.15, -0.15) * texel_size, 0.0).rgb * 0.25;
-    filtered_color     += textureSampleLevel(view_target, view_linear_sampler, uv + vec2( 0.15,  0.15) * texel_size, 0.0).rgb * 0.25;
-    filtered_color     += textureSampleLevel(view_target, view_linear_sampler, uv + vec2(-0.15,  0.15) * texel_size, 0.0).rgb * 0.25;
-#else
-    var filtered_color = texture_sample_bicubic_b(view_target, view_linear_sampler, uv, texture_size).rgb;
-#endif
+    var filtered_color = textureSampleLevel(view_target, view_linear_sampler, uv, 0.0).rgb;
 
 #ifdef TONEMAP
         filtered_color = tonemap(filtered_color);
