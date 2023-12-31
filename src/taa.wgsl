@@ -3,6 +3,7 @@
 // http://behindthepixels.io/assets/files/TemporalAA.pdf
 // http://leiy.cc/publications/TAA/TAA_EG2020_Talk.pdf
 // https://advances.realtimerendering.com/s2014/index.html#_HIGH-QUALITY_TEMPORAL_SUPERSAMPLING
+// https://github.com/google/filament/blob/v1.49.1/filament/src/materials/antiAliasing/taa.mat
 
 #import bevy_pbr::mesh_view_bindings::{view, globals}
 #import bevy_pbr::utils::PI
@@ -161,10 +162,6 @@ fn clip_towards_aabb_center(history_color: vec3<f32>, current_color: vec3<f32>, 
     } else {
         return history_color;
     }
-}
-
-fn sample_history(u: f32, v: f32) -> vec3<f32> {
-    return textureSampleLevel(history, history_linear_sampler, vec2(u, v), 0.0).rgb;
 }
 
 fn sample_view_target(uv: vec2<f32>, texture_size: vec2<f32>) -> vec3<f32> {

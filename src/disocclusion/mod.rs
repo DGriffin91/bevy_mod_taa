@@ -23,8 +23,8 @@ use bevy::render::globals::{GlobalsBuffer, GlobalsUniform};
 use bevy::render::render_resource::{BindGroupEntries, BufferBindingType, ShaderType};
 use bevy::render::view::{ViewUniform, ViewUniformOffset, ViewUniforms};
 use bevy::render::{
-    camera::{ExtractedCamera, TemporalJitter},
-    prelude::{Camera, Projection},
+    camera::ExtractedCamera,
+    prelude::Camera,
     render_graph::{NodeRunError, RenderGraphApp, RenderGraphContext, ViewNode, ViewNodeRunner},
     render_resource::{
         BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType,

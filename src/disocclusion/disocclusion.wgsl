@@ -4,6 +4,7 @@
 #import bevy_pbr::mesh_view_bindings::{view, globals}
 #import bevy_pbr::utils::PI
 #import bevy_pbr::mesh_view_bindings as vb
+#import bevy_pbr::view_transformations as vt
 
 const PI_SQ: f32 = 9.8696044010893586188344910;
 
@@ -44,64 +45,10 @@ fn world_space_pixel_radius(ndc_view_z: f32) -> f32 {
     return unproject * select(linear_depth, 1.0, is_orthographic);
 }
 
-/// Convert uv [0.0 .. 1.0] coordinate to ndc space xy [-1.0 .. 1.0]
-fn uv_to_ndc(uv: vec2<f32>) -> vec2<f32> {
-    return (uv - vec2(0.5)) * vec2(2.0, -2.0);
-}
-
-/// Convert a ndc space position to world space
-fn position_ndc_to_world(ndc_pos: vec3<f32>) -> vec3<f32> {
-    let world_pos = uni.inverse_view_proj * vec4(ndc_pos, 1.0);
-    return world_pos.xyz / world_pos.w;
-}
-
 /// Convert a ndc space position to world space
 fn position_history_ndc_to_world(ndc_pos: vec3<f32>) -> vec3<f32> {
     let world_pos = uni.prev_inverse_view_proj * vec4(ndc_pos, 1.0);
     return world_pos.xyz / world_pos.w;
-}
-
-/// Convert a world space position to ndc space
-fn position_world_to_ndc(world_pos: vec3<f32>) -> vec3<f32> {
-    let ndc_pos = vb::view.unjittered_view_proj * vec4(world_pos, 1.0);
-    return ndc_pos.xyz / ndc_pos.w;
-}
-
-fn cubic_b(v: f32) -> vec4<f32> {
-    let n = vec4(1.0, 2.0, 3.0, 4.0) - v;
-    let s = n * n * n;
-    let x = s.x;
-    let y = s.y - 4.0 * s.x;
-    let z = s.z - 4.0 * s.y + 6.0 * s.x;
-    let w = 6.0 - x - y - z;
-    return vec4(x, y, z, w) * (1.0/6.0);
-}
-
-fn texture_sample_bicubic_b(tex: texture_2d<f32>, tex_sampler: sampler, uv: vec2<f32>, texture_size: vec2<f32>) -> vec4<f32> {
-    var coords = uv * texture_size - 0.5;
-
-    let fxy = fract(coords);
-    coords = coords - fxy;
-
-    let xcubic = cubic_b(fxy.x);
-    let ycubic = cubic_b(fxy.y);
-
-    let c = coords.xxyy + vec2(-0.5, 1.5).xyxy;
-    
-    let s = vec4(xcubic.xz + xcubic.yw, ycubic.xz + ycubic.yw);
-    var offset = c + vec4(xcubic.yw, ycubic.yw) / s;
-    
-    offset = offset * (1.0 / texture_size).xxyy;
-    
-    let sample0 = textureSampleLevel(tex, tex_sampler, offset.xz, 0.0);
-    let sample1 = textureSampleLevel(tex, tex_sampler, offset.yz, 0.0);
-    let sample2 = textureSampleLevel(tex, tex_sampler, offset.xw, 0.0);
-    let sample3 = textureSampleLevel(tex, tex_sampler, offset.yw, 0.0);
-
-    let sx = s.x / (s.x + s.y);
-    let sy = s.z / (s.z + s.w);
-
-    return mix(mix(sample3, sample2, vec4(sx)), mix(sample1, sample0, vec4(sx)), vec4(sy));
 }
 
 // Dilate edges by picking the closest motion vector from 3x3 neighborhood
@@ -164,14 +111,14 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
     center_depth = textureLoad(depth, vec2<i32>(uv * texture_size), 0);
 
     // Camera movment motion vector
-    let ndc1 = vec3(uv_to_ndc(uv), closest_depth);
-    let ndc2 = vec3(uv_to_ndc(uv), history_closest_depth);
-    let a = position_world_to_ndc(position_ndc_to_world(ndc1)).xy;
-    let b = position_world_to_ndc(position_history_ndc_to_world(ndc2)).xy;
+    let ndc1 = vec3(vt::uv_to_ndc(uv), closest_depth);
+    let ndc2 = vec3(vt::uv_to_ndc(uv), history_closest_depth);
+    let a = vt::position_world_to_ndc(vt::position_ndc_to_world(ndc1)).xy;
+    let b = vt::position_world_to_ndc(position_history_ndc_to_world(ndc2)).xy;
     cam_movment = (b - a) * vec2(0.5, -0.5);
 
     // Camera rotate
-    let closest_b = position_world_to_ndc(position_history_ndc_to_world(ndc1)).xy;
+    let closest_b = vt::position_world_to_ndc(position_history_ndc_to_world(ndc1)).xy;
     let cam_rotate = (closest_b - a) * vec2(0.5, -0.5);
 
     // Cancel out camera movment when checking motion vector distance
@@ -189,9 +136,9 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
 
     let farthest_pixel_radius = world_space_pixel_radius(farthest_depth);
 
-    let history_world_position = position_history_ndc_to_world(vec3(uv_to_ndc(history_uv), history_depth));
-    let farthest_world_position = position_ndc_to_world(vec3(uv_to_ndc(uv), farthest_depth));
-    let closest_world_position = position_ndc_to_world(vec3(uv_to_ndc(uv), closest_depth));
+    let history_world_position = position_history_ndc_to_world(vec3(vt::uv_to_ndc(history_uv), history_depth));
+    let farthest_world_position = vt::position_ndc_to_world(vec3(vt::uv_to_ndc(uv), farthest_depth));
+    let closest_world_position = vt::position_ndc_to_world(vec3(vt::uv_to_ndc(uv), closest_depth));
 
 
     let pixel_radius_scaled = farthest_pixel_radius * uni.depth_disocclusion_px_radius;
