@@ -9,6 +9,7 @@
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use bevy::math::uvec2;
+use bevy::render::render_asset::RenderAssetUsages;
 use bevy::{
     app::AppExit,
     core::FrameCount,
@@ -91,7 +92,7 @@ struct CameraMovementSettings {
 }
 
 fn modify_aa(
-    keys: Res<Input<KeyCode>>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut camera: Query<(Entity, Option<&mut Fxaa>, Option<&mut TAASettings>), With<Camera>>,
     mut msaa: ResMut<Msaa>,
     mut commands: Commands,
@@ -101,14 +102,14 @@ fn modify_aa(
     let mut camera = commands.entity(camera_entity);
 
     // No AA
-    if keys.just_pressed(KeyCode::Key1) {
+    if keys.just_pressed(KeyCode::Digit1) {
         *msaa = Msaa::Off;
         camera.remove::<Fxaa>();
         camera.remove::<TAABundle>();
     }
 
     // MSAA
-    if keys.just_pressed(KeyCode::Key2) && *msaa == Msaa::Off {
+    if keys.just_pressed(KeyCode::Digit2) && *msaa == Msaa::Off {
         camera.remove::<Fxaa>();
         camera.remove::<TAABundle>();
 
@@ -117,19 +118,19 @@ fn modify_aa(
 
     // MSAA Sample Count
     if *msaa != Msaa::Off {
-        if keys.just_pressed(KeyCode::Q) {
+        if keys.just_pressed(KeyCode::KeyQ) {
             *msaa = Msaa::Sample2;
         }
-        if keys.just_pressed(KeyCode::W) {
+        if keys.just_pressed(KeyCode::KeyW) {
             *msaa = Msaa::Sample4;
         }
-        if keys.just_pressed(KeyCode::E) {
+        if keys.just_pressed(KeyCode::KeyE) {
             *msaa = Msaa::Sample8;
         }
     }
 
     // FXAA
-    if keys.just_pressed(KeyCode::Key3) && fxaa.is_none() {
+    if keys.just_pressed(KeyCode::Digit3) && fxaa.is_none() {
         *msaa = Msaa::Off;
         camera.remove::<TAABundle>();
 
@@ -138,42 +139,42 @@ fn modify_aa(
 
     // FXAA Settings
     if let Some(mut fxaa) = fxaa {
-        if keys.just_pressed(KeyCode::Q) {
+        if keys.just_pressed(KeyCode::KeyQ) {
             fxaa.edge_threshold = Sensitivity::Low;
             fxaa.edge_threshold_min = Sensitivity::Low;
         }
-        if keys.just_pressed(KeyCode::W) {
+        if keys.just_pressed(KeyCode::KeyW) {
             fxaa.edge_threshold = Sensitivity::Medium;
             fxaa.edge_threshold_min = Sensitivity::Medium;
         }
-        if keys.just_pressed(KeyCode::E) {
+        if keys.just_pressed(KeyCode::KeyE) {
             fxaa.edge_threshold = Sensitivity::High;
             fxaa.edge_threshold_min = Sensitivity::High;
         }
-        if keys.just_pressed(KeyCode::R) {
+        if keys.just_pressed(KeyCode::KeyR) {
             fxaa.edge_threshold = Sensitivity::Ultra;
             fxaa.edge_threshold_min = Sensitivity::Ultra;
         }
-        if keys.just_pressed(KeyCode::T) {
+        if keys.just_pressed(KeyCode::KeyT) {
             fxaa.edge_threshold = Sensitivity::Extreme;
             fxaa.edge_threshold_min = Sensitivity::Extreme;
         }
     }
 
     if let Some(ref mut _taa) = taa {
-        if keys.just_pressed(KeyCode::Q) {
+        if keys.just_pressed(KeyCode::KeyQ) {
             camera.insert(TAABundle::sample2());
         }
-        if keys.just_pressed(KeyCode::W) {
+        if keys.just_pressed(KeyCode::KeyW) {
             camera.insert(TAABundle::sample4());
         }
-        if keys.just_pressed(KeyCode::E) {
+        if keys.just_pressed(KeyCode::KeyE) {
             camera.insert(TAABundle::sample8());
         }
     }
 
     // TAA
-    if keys.just_pressed(KeyCode::Key4) && taa.is_none() {
+    if keys.just_pressed(KeyCode::Digit4) && taa.is_none() {
         *msaa = Msaa::Off;
         camera.remove::<Fxaa>();
 
@@ -181,22 +182,22 @@ fn modify_aa(
     }
 
     // Rotate Camera
-    if keys.just_pressed(KeyCode::K) {
+    if keys.just_pressed(KeyCode::KeyK) {
         camera_movement_settings.rotate_camera = !camera_movement_settings.rotate_camera;
     }
 
     // Circle look camera
-    if keys.just_pressed(KeyCode::L) {
+    if keys.just_pressed(KeyCode::KeyL) {
         camera_movement_settings.circle_look_camera = !camera_movement_settings.circle_look_camera;
     }
 }
 
 fn modify_sharpening(
-    keys: Res<Input<KeyCode>>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut query: Query<&mut ContrastAdaptiveSharpeningSettings>,
 ) {
     for mut cas in &mut query {
-        if keys.just_pressed(KeyCode::Key0) {
+        if keys.just_pressed(KeyCode::Digit0) {
             cas.enabled = !cas.enabled;
         }
         if cas.enabled {
@@ -204,11 +205,11 @@ fn modify_sharpening(
                 cas.sharpening_strength -= 0.1;
                 cas.sharpening_strength = cas.sharpening_strength.clamp(0.0, 1.0);
             }
-            if keys.just_pressed(KeyCode::Equals) {
+            if keys.just_pressed(KeyCode::Equal) {
                 cas.sharpening_strength += 0.1;
                 cas.sharpening_strength = cas.sharpening_strength.clamp(0.0, 1.0);
             }
-            if keys.just_pressed(KeyCode::D) {
+            if keys.just_pressed(KeyCode::KeyD) {
                 cas.denoise = !cas.denoise;
             }
         }
@@ -424,13 +425,13 @@ fn setup_scene(
 
     // Plane
     commands.spawn(PbrBundle {
-        mesh: meshes.add(shape::Plane::from_size(5.0).into()),
-        material: materials.add(Color::rgb(0.3, 0.5, 0.3).into()),
+        mesh: meshes.add(Plane3d::default().mesh().size(5.0, 5.0)),
+        material: materials.add(Color::rgb(0.3, 0.5, 0.3)),
         ..default()
     });
 
     // Plane 2
-    let mut noise_mesh: Mesh = shape::Plane::from_size(5.0).into();
+    let mut noise_mesh: Mesh = Plane3d::default().mesh().size(5.0, 5.0).into();
 
     let height = main_window.single().resolution.physical_height();
 
@@ -457,7 +458,7 @@ fn setup_scene(
     //    ..default()
     //});
 
-    let cube_h = meshes.add(Mesh::from(shape::Cube { size: 0.25 }));
+    let cube_h = meshes.add(Cuboid::new(0.25, 0.25, 0.25));
 
     // Cubes
     for i in 0..5 {
@@ -487,7 +488,7 @@ fn setup_scene(
     commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
             shadows_enabled: true,
-            illuminance: 80000.0,
+            illuminance: 80000.0 * 0.2,
             ..default()
         },
         transform: Transform::from_rotation(Quat::from_euler(
@@ -602,6 +603,7 @@ fn uv_debug_texture() -> Image {
         TextureDimension::D2,
         &texture_data,
         TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
     );
     img.sampler = ImageSampler::Descriptor(SamplerDescriptor::default().into());
     img
@@ -653,6 +655,7 @@ fn noise_debug_texture() -> Image {
         TextureDimension::D2,
         &texture_data,
         TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
     );
 
     // Generate mips

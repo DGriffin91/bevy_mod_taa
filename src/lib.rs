@@ -1,7 +1,7 @@
 use bevy::app::{App, Plugin};
 use bevy::asset::{load_internal_asset, Handle};
 use bevy::core::FrameCount;
-use bevy::core_pipeline::core_3d::{self, CORE_3D};
+use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::core_pipeline::fullscreen_vertex_shader::fullscreen_shader_vertex_state;
 use bevy::core_pipeline::prepass::{
     DepthPrepass, MotionVectorPrepass, NormalPrepass, ViewPrepassTextures,
@@ -20,6 +20,7 @@ use bevy::render::extract_component::{
     ComponentUniforms, DynamicUniformIndex, UniformComponentPlugin,
 };
 use bevy::render::globals::{GlobalsBuffer, GlobalsUniform};
+use bevy::render::render_graph::RenderLabel;
 use bevy::render::render_resource::{BindGroupEntries, BufferBindingType, ShaderType};
 use bevy::render::view::{ViewUniform, ViewUniformOffset, ViewUniforms};
 use bevy::render::{
@@ -27,13 +28,12 @@ use bevy::render::{
     prelude::Camera,
     render_graph::{NodeRunError, RenderGraphApp, RenderGraphContext, ViewNode, ViewNodeRunner},
     render_resource::{
-        BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType,
-        CachedRenderPipelineId, ColorTargetState, ColorWrites, Extent3d, FilterMode, FragmentState,
-        MultisampleState, Operations, PipelineCache, PrimitiveState, RenderPassColorAttachment,
-        RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType,
-        SamplerDescriptor, Shader, ShaderStages, SpecializedRenderPipeline,
-        SpecializedRenderPipelines, TextureDescriptor, TextureDimension, TextureFormat,
-        TextureSampleType, TextureUsages, TextureViewDimension,
+        BindGroupLayout, BindGroupLayoutEntry, BindingType, CachedRenderPipelineId,
+        ColorTargetState, ColorWrites, Extent3d, FilterMode, FragmentState, MultisampleState,
+        Operations, PipelineCache, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
+        RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor, Shader,
+        ShaderStages, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureDescriptor,
+        TextureDimension, TextureFormat, TextureSampleType, TextureUsages, TextureViewDimension,
     },
     renderer::{RenderContext, RenderDevice},
     texture::{BevyDefault, CachedTexture, TextureCache},
@@ -44,17 +44,13 @@ use disocclusion::{DisocclusionSettings, DisocclusionTextures};
 use fxaa::FxaaPrepass;
 
 use crate::disocclusion::DisocclusionPlugin;
-use crate::fxaa::FxaaNode;
+use crate::fxaa::{FxaaNode, FxaaPrepassLabel};
 
 pub mod disocclusion;
 pub mod fxaa;
 
-mod draw_3d_graph {
-    pub mod node {
-        /// Label for the TAA render node.
-        pub const TAA: &str = "taa";
-    }
-}
+#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
+pub struct TAALabel;
 
 const TAA_SHADER_HANDLE: Handle<Shader> = Handle::weak_from_u128(9832793854650921);
 
@@ -91,17 +87,17 @@ impl Plugin for TAAPlugin {
                     prepare_taa_history_textures.in_set(RenderSet::PrepareResources),
                 ),
             )
-            .add_render_graph_node::<ViewNodeRunner<TAANode>>(CORE_3D, draw_3d_graph::node::TAA)
-            .add_render_graph_node::<ViewNodeRunner<FxaaNode>>(CORE_3D, fxaa::FXAA_PREPASS)
+            .add_render_graph_node::<ViewNodeRunner<TAANode>>(Core3d, TAALabel)
+            .add_render_graph_node::<ViewNodeRunner<FxaaNode>>(Core3d, FxaaPrepassLabel)
             .add_render_graph_edges(
-                CORE_3D,
-                &[
-                    core_3d::graph::node::END_MAIN_PASS,
-                    fxaa::FXAA_PREPASS,
-                    draw_3d_graph::node::TAA,
-                    core_3d::graph::node::BLOOM,
-                    core_3d::graph::node::TONEMAPPING,
-                ],
+                Core3d,
+                (
+                    Node3d::EndMainPass,
+                    FxaaPrepassLabel,
+                    TAALabel,
+                    Node3d::Bloom,
+                    Node3d::Tonemapping,
+                ),
             );
     }
 
@@ -319,8 +315,8 @@ impl ViewNode for TAANode {
                 (21, &pipelines.linear_samplers[0]),
                 (22, &taa_history_textures.read.default_view),
                 (23, &pipelines.linear_samplers[1]),
-                (24, &prepass_motion_vectors_texture.default_view),
-                (25, &prepass_depth_texture.default_view),
+                (24, &prepass_motion_vectors_texture.texture.default_view),
+                (25, &prepass_depth_texture.texture.default_view),
                 (26, uniforms),
                 (27, &disocclusion_textures.output.default_view),
             )),
@@ -342,6 +338,8 @@ impl ViewNode for TAANode {
                     }),
                 ],
                 depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
             });
             taa_pass.set_render_pipeline(taa_pipeline);
             taa_pass.set_bind_group(
@@ -381,114 +379,113 @@ impl FromWorld for TAAPipeline {
             render_device.create_sampler(&linear_discriptor),
         ];
 
-        let taa_bind_group_layout =
-            render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: Some("taa_bind_group_layout"),
-                entries: &[
-                    // View
-                    BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: true,
-                            min_binding_size: Some(ViewUniform::min_size()),
-                        },
-                        count: None,
+        let taa_bind_group_layout = render_device.create_bind_group_layout(
+            Some("taa_bind_group_layout"),
+            &[
+                // View
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: Some(ViewUniform::min_size()),
                     },
-                    // Globals
-                    BindGroupLayoutEntry {
-                        binding: 9,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: Some(GlobalsUniform::min_size()),
-                        },
-                        count: None,
+                    count: None,
+                },
+                // Globals
+                BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(GlobalsUniform::min_size()),
                     },
-                    // View target (read)
-                    BindGroupLayoutEntry {
-                        binding: 20,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: true },
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // View target (read)
+                BindGroupLayoutEntry {
+                    binding: 20,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // View target Linear sampler
-                    BindGroupLayoutEntry {
-                        binding: 21,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                        count: None,
+                    count: None,
+                },
+                // View target Linear sampler
+                BindGroupLayoutEntry {
+                    binding: 21,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // TAA History (read)
+                BindGroupLayoutEntry {
+                    binding: 22,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // TAA History (read)
-                    BindGroupLayoutEntry {
-                        binding: 22,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: true },
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // TAA History Linear sampler
+                BindGroupLayoutEntry {
+                    binding: 23,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // Motion Vectors
+                BindGroupLayoutEntry {
+                    binding: 24,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // TAA History Linear sampler
-                    BindGroupLayoutEntry {
-                        binding: 23,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                        count: None,
+                    count: None,
+                },
+                // Depth
+                BindGroupLayoutEntry {
+                    binding: 25,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Depth,
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // Motion Vectors
-                    BindGroupLayoutEntry {
-                        binding: 24,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: true },
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // TAA Parameters
+                BindGroupLayoutEntry {
+                    binding: 26,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: Some(TAAUniforms::min_size()),
                     },
-                    // Depth
-                    BindGroupLayoutEntry {
-                        binding: 25,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Depth,
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
+                    visibility: ShaderStages::FRAGMENT,
+                    count: None,
+                },
+                // Disocclusion Output
+                BindGroupLayoutEntry {
+                    binding: 27,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // TAA Parameters
-                    BindGroupLayoutEntry {
-                        binding: 26,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: true,
-                            min_binding_size: Some(TAAUniforms::min_size()),
-                        },
-                        visibility: ShaderStages::FRAGMENT,
-                        count: None,
-                    },
-                    // Disocclusion Output
-                    BindGroupLayoutEntry {
-                        binding: 27,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: true },
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                ],
-            });
+                    count: None,
+                },
+            ],
+        );
 
         TAAPipeline {
             taa_bind_group_layout,

@@ -259,8 +259,8 @@ fn fragment(@location(0) uv: vec2<f32>) -> Output {
     var reprojection_fail = false;
     // Fall back to bicubic if the reprojected uv is off screen 
     if reprojection_fail ||
-        any(history_uv <= 0.0) ||
-        any(history_uv >= 1.0) {
+        any(history_uv <= vec2(0.0)) ||
+        any(history_uv >= vec2(1.0)) {
         current_color = filtered_color;
         history_confidence = 1.0;
         reprojection_fail = true;

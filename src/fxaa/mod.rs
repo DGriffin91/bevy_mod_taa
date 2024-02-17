@@ -1,11 +1,12 @@
 use bevy::app::prelude::*;
 use bevy::asset::{load_internal_asset, Handle};
-use bevy::core_pipeline::core_2d::{self, CORE_2D};
-use bevy::core_pipeline::core_3d::{self, CORE_3D};
+use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
+use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::core_pipeline::fullscreen_vertex_shader::fullscreen_shader_vertex_state;
 use bevy::ecs::prelude::*;
 use bevy::prelude::*;
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
+use bevy::render::render_graph::RenderLabel;
 use bevy::render::{
     extract_component::{ExtractComponent, ExtractComponentPlugin},
     render_graph::RenderGraphApp,
@@ -86,7 +87,8 @@ impl FxaaPrepass {
 
 const FXAA_SHADER_HANDLE: Handle<Shader> = Handle::weak_from_u128(923847520938471);
 
-pub const FXAA_PREPASS: &str = "taa_fxaa_prepass";
+#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
+pub struct FxaaPrepassLabel;
 
 /// Adds support for Fast Approximate Anti-Aliasing (FXAA)
 pub struct FxaaPrepassPlugin;
@@ -104,23 +106,23 @@ impl Plugin for FxaaPrepassPlugin {
         render_app
             .init_resource::<SpecializedRenderPipelines<FxaaPipeline>>()
             .add_systems(Render, prepare_fxaa_pipelines.in_set(RenderSet::Prepare))
-            .add_render_graph_node::<ViewNodeRunner<FxaaNode>>(CORE_3D, FXAA_PREPASS)
+            .add_render_graph_node::<ViewNodeRunner<FxaaNode>>(Core3d, FxaaPrepassLabel)
             .add_render_graph_edges(
-                CORE_3D,
-                &[
-                    core_3d::graph::node::TONEMAPPING,
-                    FXAA_PREPASS,
-                    core_3d::graph::node::END_MAIN_PASS_POST_PROCESSING,
-                ],
+                Core3d,
+                (
+                    Node3d::Tonemapping,
+                    FxaaPrepassLabel,
+                    Node3d::EndMainPassPostProcessing,
+                ),
             )
-            .add_render_graph_node::<ViewNodeRunner<FxaaNode>>(CORE_2D, FXAA_PREPASS)
+            .add_render_graph_node::<ViewNodeRunner<FxaaNode>>(Core2d, FxaaPrepassLabel)
             .add_render_graph_edges(
-                CORE_2D,
-                &[
-                    core_2d::graph::node::TONEMAPPING,
-                    FXAA_PREPASS,
-                    core_2d::graph::node::END_MAIN_PASS_POST_PROCESSING,
-                ],
+                Core2d,
+                (
+                    Node2d::Tonemapping,
+                    FxaaPrepassLabel,
+                    Node2d::EndMainPassPostProcessing,
+                ),
             );
     }
 
@@ -142,9 +144,9 @@ impl FromWorld for FxaaPipeline {
     fn from_world(render_world: &mut World) -> Self {
         let texture_bind_group = render_world
             .resource::<RenderDevice>()
-            .create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: Some("fxaa_texture_bind_group_layout"),
-                entries: &[
+            .create_bind_group_layout(
+                Some("fxaa_texture_bind_group_layout"),
+                &[
                     BindGroupLayoutEntry {
                         binding: 0,
                         visibility: ShaderStages::FRAGMENT,
@@ -162,7 +164,7 @@ impl FromWorld for FxaaPipeline {
                         count: None,
                     },
                 ],
-            });
+            );
 
         FxaaPipeline { texture_bind_group }
     }

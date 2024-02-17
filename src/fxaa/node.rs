@@ -40,9 +40,9 @@ impl ViewNode for FxaaNode {
             return Ok(());
         };
 
-        let pipeline = pipeline_cache
-            .get_render_pipeline(pipeline.pipeline_id)
-            .unwrap();
+        let Some(pipeline) = pipeline_cache.get_render_pipeline(pipeline.pipeline_id) else {
+            return Ok(());
+        };
 
         let post_process = target.post_process_write();
         let source = post_process.source;
@@ -88,6 +88,8 @@ impl ViewNode for FxaaNode {
                 ops: Operations::default(),
             })],
             depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
         };
 
         let mut render_pass = render_context

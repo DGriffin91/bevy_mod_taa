@@ -2,7 +2,7 @@
 
 WIP
 
-Depends on bevy 0.12
+Depends on bevy 0.13
 
 `bevy_mod_taa` addresses a few issues related to smearing over disoccluded areas, and also favors sharper blending overall. 
 

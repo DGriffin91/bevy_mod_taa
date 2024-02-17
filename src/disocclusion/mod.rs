@@ -1,7 +1,8 @@
 use bevy::app::{App, Plugin};
 use bevy::asset::{load_internal_asset, Handle};
 use bevy::core::FrameCount;
-use bevy::core_pipeline::core_3d::{self, CORE_3D};
+use bevy::core_pipeline::core_3d;
+use bevy::core_pipeline::core_3d::graph::Node3d;
 use bevy::core_pipeline::fullscreen_vertex_shader::fullscreen_shader_vertex_state;
 use bevy::core_pipeline::prepass::{
     DepthPrepass, MotionVectorPrepass, ViewPrepassTextures, NORMAL_PREPASS_FORMAT,
@@ -20,6 +21,7 @@ use bevy::render::extract_component::{
     ComponentUniforms, DynamicUniformIndex, UniformComponentPlugin,
 };
 use bevy::render::globals::{GlobalsBuffer, GlobalsUniform};
+use bevy::render::render_graph::RenderLabel;
 use bevy::render::render_resource::{BindGroupEntries, BufferBindingType, ShaderType};
 use bevy::render::view::{ViewUniform, ViewUniformOffset, ViewUniforms};
 use bevy::render::{
@@ -27,13 +29,12 @@ use bevy::render::{
     prelude::Camera,
     render_graph::{NodeRunError, RenderGraphApp, RenderGraphContext, ViewNode, ViewNodeRunner},
     render_resource::{
-        BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType,
-        CachedRenderPipelineId, ColorTargetState, ColorWrites, Extent3d, FilterMode, FragmentState,
-        MultisampleState, Operations, PipelineCache, PrimitiveState, RenderPassColorAttachment,
-        RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType,
-        SamplerDescriptor, Shader, ShaderStages, SpecializedRenderPipeline,
-        SpecializedRenderPipelines, TextureDescriptor, TextureDimension, TextureFormat,
-        TextureSampleType, TextureUsages, TextureViewDimension,
+        BindGroupLayout, BindGroupLayoutEntry, BindingType, CachedRenderPipelineId,
+        ColorTargetState, ColorWrites, Extent3d, FilterMode, FragmentState, MultisampleState,
+        Operations, PipelineCache, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
+        RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor, Shader,
+        ShaderStages, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureDescriptor,
+        TextureDimension, TextureFormat, TextureSampleType, TextureUsages, TextureViewDimension,
     },
     renderer::{RenderContext, RenderDevice},
     texture::{CachedTexture, TextureCache},
@@ -41,12 +42,8 @@ use bevy::render::{
     ExtractSchedule, MainWorld, Render, RenderApp, RenderSet,
 };
 
-mod draw_3d_graph {
-    pub mod node {
-        /// Label for the DISOCCLUSION render node.
-        pub const DISOCCLUSION: &str = "disocclusion detection";
-    }
-}
+#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
+pub struct DisocclusionLabel;
 
 const DISOCCLUSION_SHADER_HANDLE: Handle<Shader> = Handle::weak_from_u128(82390847572039487);
 
@@ -86,15 +83,12 @@ impl Plugin for DisocclusionPlugin {
                 ),
             )
             .add_render_graph_node::<ViewNodeRunner<DisocclusionNode>>(
-                CORE_3D,
-                draw_3d_graph::node::DISOCCLUSION,
+                core_3d::graph::Core3d,
+                DisocclusionLabel,
             )
             .add_render_graph_edges(
-                CORE_3D,
-                &[
-                    core_3d::graph::node::END_PREPASSES,
-                    draw_3d_graph::node::DISOCCLUSION,
-                ],
+                core_3d::graph::Core3d,
+                (Node3d::EndPrepasses, DisocclusionLabel),
             );
     }
 
@@ -209,10 +203,10 @@ impl ViewNode for DisocclusionNode {
                 (22, &pipelines.linear_samplers[1]),
                 (23, &disocclusion_textures.history_read.default_view),
                 (24, &disocclusion_textures.history_normals_read.default_view),
-                (25, &prepass_motion_vectors_texture.default_view),
+                (25, &prepass_motion_vectors_texture.texture.default_view),
                 (26, uniforms),
-                (27, &prepass_depth_texture.default_view),
-                (28, &prepass_normal_texture.default_view),
+                (27, &prepass_depth_texture.texture.default_view),
+                (28, &prepass_normal_texture.texture.default_view),
             )),
         );
 
@@ -238,6 +232,8 @@ impl ViewNode for DisocclusionNode {
                         }),
                     ],
                     depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
                 });
             disocclusion_pass.set_render_pipeline(disocclusion_pipeline);
             disocclusion_pass.set_bind_group(
@@ -277,114 +273,113 @@ impl FromWorld for DisocclusionPipeline {
             render_device.create_sampler(&linear_discriptor),
         ];
 
-        let disocclusion_bind_group_layout =
-            render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: Some("disocclusion_bind_group_layout"),
-                entries: &[
-                    // View
-                    BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: true,
-                            min_binding_size: Some(ViewUniform::min_size()),
-                        },
-                        count: None,
+        let disocclusion_bind_group_layout = render_device.create_bind_group_layout(
+            Some("disocclusion_bind_group_layout"),
+            &[
+                // View
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: Some(ViewUniform::min_size()),
                     },
-                    // Globals
-                    BindGroupLayoutEntry {
-                        binding: 9,
-                        visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: Some(GlobalsUniform::min_size()),
-                        },
-                        count: None,
+                    count: None,
+                },
+                // Globals
+                BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(GlobalsUniform::min_size()),
                     },
-                    // View target Linear sampler
-                    BindGroupLayoutEntry {
-                        binding: 21,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                        count: None,
+                    count: None,
+                },
+                // View target Linear sampler
+                BindGroupLayoutEntry {
+                    binding: 21,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // Disocclusion History Linear sampler
+                BindGroupLayoutEntry {
+                    binding: 22,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // Disocclusion Data History (read)
+                BindGroupLayoutEntry {
+                    binding: 23,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // Disocclusion History Linear sampler
-                    BindGroupLayoutEntry {
-                        binding: 22,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                        count: None,
+                    count: None,
+                },
+                // Disocclusion Data Normals History (read)
+                BindGroupLayoutEntry {
+                    binding: 24,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // Disocclusion Data History (read)
-                    BindGroupLayoutEntry {
-                        binding: 23,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: true },
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // Motion Vectors
+                BindGroupLayoutEntry {
+                    binding: 25,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // Disocclusion Data Normals History (read)
-                    BindGroupLayoutEntry {
-                        binding: 24,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: true },
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // Disocclusion Parameters
+                BindGroupLayoutEntry {
+                    binding: 26,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: Some(DisocclusionUniforms::min_size()),
                     },
-                    // Motion Vectors
-                    BindGroupLayoutEntry {
-                        binding: 25,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: true },
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
+                    visibility: ShaderStages::FRAGMENT,
+                    count: None,
+                },
+                // Depth
+                BindGroupLayoutEntry {
+                    binding: 27,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Depth,
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // Disocclusion Parameters
-                    BindGroupLayoutEntry {
-                        binding: 26,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: true,
-                            min_binding_size: Some(DisocclusionUniforms::min_size()),
-                        },
-                        visibility: ShaderStages::FRAGMENT,
-                        count: None,
+                    count: None,
+                },
+                // Normals
+                BindGroupLayoutEntry {
+                    binding: 28,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // Depth
-                    BindGroupLayoutEntry {
-                        binding: 27,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Depth,
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    // Normals
-                    BindGroupLayoutEntry {
-                        binding: 28,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: true },
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                ],
-            });
+                    count: None,
+                },
+            ],
+        );
 
         DisocclusionPipeline {
             disocclusion_bind_group_layout,
